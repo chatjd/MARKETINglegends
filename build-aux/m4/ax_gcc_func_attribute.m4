@@ -202,4 +202,22 @@ AC_DEFUN([AX_GCC_FUNC_ATTRIBUTE], [
                 ],
                 [
                  m4_warn([syntax], [Unsupported attribute $1, the test may fail])
-                 
+                 int foo( void ) __attribute__(($1));
+                ]
+            )], [])
+            ],
+            dnl GCC doesn't exit with an error if an unknown attribute is
+            dnl provided but only outputs a warning, so accept the attribute
+            dnl only if no warning were issued.
+            [AS_IF([test -s conftest.err],
+                [AS_VAR_SET([ac_var], [no])],
+                [AS_VAR_SET([ac_var], [yes])])],
+            [AS_VAR_SET([ac_var], [no])])
+    ])
+
+    AS_IF([test yes = AS_VAR_GET([ac_var])],
+        [AC_DEFINE_UNQUOTED(AS_TR_CPP(HAVE_FUNC_ATTRIBUTE_$1), 1,
+            [Define to 1 if the system has the `$1' function attribute])], [])
+
+    AS_VAR_POPDEF([ac_var])
+])
