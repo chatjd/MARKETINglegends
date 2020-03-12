@@ -452,4 +452,34 @@ if test "x$ax_pthread_ok" = "xyes"; then
 	LIBS="$ax_pthread_save_LIBS"
 
 	# More AIX lossage: compile with *_r variant
-	if test "x$GCC" !
+	if test "x$GCC" != "xyes"; then
+	    case $host_os in
+		aix*)
+		AS_CASE(["x/$CC"],
+		    [x*/c89|x*/c89_128|x*/c99|x*/c99_128|x*/cc|x*/cc128|x*/xlc|x*/xlc_v6|x*/xlc128|x*/xlc128_v6],
+		    [#handle absolute path differently from PATH based program lookup
+		     AS_CASE(["x$CC"],
+			 [x/*],
+			 [AS_IF([AS_EXECUTABLE_P([${CC}_r])],[PTHREAD_CC="${CC}_r"])],
+			 [AC_CHECK_PROGS([PTHREAD_CC],[${CC}_r],[$CC])])])
+		;;
+	    esac
+	fi
+fi
+
+test -n "$PTHREAD_CC" || PTHREAD_CC="$CC"
+
+AC_SUBST([PTHREAD_LIBS])
+AC_SUBST([PTHREAD_CFLAGS])
+AC_SUBST([PTHREAD_CC])
+
+# Finally, execute ACTION-IF-FOUND/ACTION-IF-NOT-FOUND:
+if test "x$ax_pthread_ok" = "xyes"; then
+	ifelse([$1],,[AC_DEFINE([HAVE_PTHREAD],[1],[Define if you have POSIX threads libraries and header files.])],[$1])
+	:
+else
+	ax_pthread_ok=no
+	$2
+fi
+AC_LANG_POP
+])dnl AX_PTHREAD
