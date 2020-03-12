@@ -308,4 +308,159 @@ case $host in
          dnl add default macports paths
          CPPFLAGS="$CPPFLAGS -isystem /opt/local/include"
          LIBS="$LIBS -L/opt/local/lib"
-       
+         if test -d /opt/local/include/db62; then
+           CPPFLAGS="$CPPFLAGS -I/opt/local/include/db62"
+           LIBS="$LIBS -L/opt/local/lib/db62"
+         fi
+       fi
+
+       AC_CHECK_PROG([BREW],brew, brew)
+       if test x$BREW = xbrew; then
+         dnl These Homebrew packages may be keg-only, meaning that they won't be found
+         dnl in expected paths because they may conflict with system files. Ask
+         dnl Homebrew where each one is located, then adjust paths accordingly.
+         dnl It's safe to add these paths even if the functionality is disabled by
+         dnl the user (--without-wallet for example).
+
+         openssl_prefix=`$BREW --prefix openssl 2>/dev/null`
+         bdb_prefix=`$BREW --prefix berkeley-db4 2>/dev/null`
+         if test x$openssl_prefix != x; then
+           PKG_CONFIG_PATH="$openssl_prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
+           export PKG_CONFIG_PATH
+         fi
+         if test x$bdb_prefix != x; then
+           CPPFLAGS="$CPPFLAGS -I$bdb_prefix/include"
+           LIBS="$LIBS -L$bdb_prefix/lib"
+         fi
+       fi
+     else
+       case $build_os in
+         *darwin*)
+           BUILD_OS=darwin
+           ;;
+         *)
+           AC_PATH_TOOL([INSTALLNAMETOOL], [install_name_tool], install_name_tool)
+           AC_PATH_TOOL([OTOOL], [otool], otool)
+           AC_PATH_PROGS([GENISOIMAGE], [genisoimage mkisofs],genisoimage)
+
+           dnl libtool will try to strip the static lib, which is a problem for
+           dnl cross-builds because strip attempts to call a hard-coded ld,
+           dnl which may not exist in the path. Stripping the .a is not
+           dnl necessary, so just disable it.
+           old_striplib=
+           ;;
+       esac
+     fi
+
+     AX_CHECK_LINK_FLAG([[-Wl,-headerpad_max_install_names]], [LDFLAGS="$LDFLAGS -Wl,-headerpad_max_install_names"])
+     CPPFLAGS="$CPPFLAGS -DMAC_OSX"
+     OBJCXXFLAGS="$CXXFLAGS"
+     ;;
+   *linux*)
+     TARGET_OS=linux
+     ;;
+   *)
+     ;;
+esac
+
+if test x$use_pkgconfig = xyes; then
+  m4_ifndef([PKG_PROG_PKG_CONFIG], [AC_MSG_ERROR(PKG_PROG_PKG_CONFIG macro not found. Please install pkg-config and re-run autogen.sh.)])
+  m4_ifdef([PKG_PROG_PKG_CONFIG], [
+  PKG_PROG_PKG_CONFIG
+  if test x"$PKG_CONFIG" = "x"; then
+    AC_MSG_ERROR(pkg-config not found.)
+  fi
+  ])
+fi
+
+if test x$use_lcov = xyes; then
+  if test x$LCOV = x; then
+    AC_MSG_ERROR("lcov testing requested but lcov not found")
+  fi
+  if test x$GCOV = x; then
+    AC_MSG_ERROR("lcov testing requested but gcov not found")
+  fi
+  if test x$GENHTML = x; then
+    AC_MSG_ERROR("lcov testing requested but genhtml not found")
+  fi
+  LCOV="$LCOV --gcov-tool=$GCOV --rc lcov_branch_coverage=1"
+  GENHTML="$GENHTML --branch-coverage"
+  AX_CHECK_COMPILE_FLAG([--coverage],[CXXFLAGS="$CXXFLAGS --coverage"],
+    [AC_MSG_ERROR("lcov testing requested but --coverage flag does not work")])
+fi
+
+dnl Check for endianness
+AC_C_BIGENDIAN
+
+dnl Check for pthread compile/link requirements
+AX_PTHREAD
+
+# The following macro will add the necessary defines to bitcoin-config.h, but
+# they also need to be passed down to any subprojects. Pull the results out of
+# the cache and add them to CPPFLAGS.
+AC_SYS_LARGEFILE
+# detect POSIX or GNU variant of strerror_r
+AC_FUNC_STRERROR_R
+
+if test x$ac_cv_sys_file_offset_bits != x &&
+   test x$ac_cv_sys_file_offset_bits != xno &&
+   test x$ac_cv_sys_file_offset_bits != xunknown; then
+  CPPFLAGS="$CPPFLAGS -D_FILE_OFFSET_BITS=$ac_cv_sys_file_offset_bits"
+fi
+
+if test x$ac_cv_sys_large_files != x &&
+   test x$ac_cv_sys_large_files != xno &&
+   test x$ac_cv_sys_large_files != xunknown; then
+  CPPFLAGS="$CPPFLAGS -D_LARGE_FILES=$ac_cv_sys_large_files"
+fi
+
+AX_CHECK_LINK_FLAG([[-Wl,--large-address-aware]], [LDFLAGS="$LDFLAGS -Wl,--large-address-aware"])
+
+AX_GCC_FUNC_ATTRIBUTE([visibility])
+AX_GCC_FUNC_ATTRIBUTE([dllexport])
+AX_GCC_FUNC_ATTRIBUTE([dllimport])
+
+if test x$use_glibc_compat != xno; then
+
+  #glibc absorbed clock_gettime in 2.17. librt (its previous location) is safe to link
+  #in anyway for back-compat.
+  AC_CHECK_LIB([rt],[clock_gettime],, AC_MSG_ERROR(lib missing))
+
+  #__fdelt_chk's params and return type have changed from long unsigned int to long int.
+  # See which one is present here.
+  AC_MSG_CHECKING(__fdelt_chk type)
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#ifdef _FORTIFY_SOURCE
+                    #undef _FORTIFY_SOURCE
+                  #endif
+                  #define _FORTIFY_SOURCE 2
+                  #include <sys/select.h>
+     extern "C" long unsigned int __fdelt_warn(long unsigned int);]],[[]])],
+    [ fdelt_type="long unsigned int"],
+    [ fdelt_type="long int"])
+  AC_MSG_RESULT($fdelt_type)
+  AC_DEFINE_UNQUOTED(FDELT_TYPE, $fdelt_type,[parameter and return value type for __fdelt_chk])
+else
+  AC_SEARCH_LIBS([clock_gettime],[rt])
+fi
+
+if test x$TARGET_OS != xwindows; then
+  # All windows code is PIC, forcing it on just adds useless compile warnings
+  AX_CHECK_COMPILE_FLAG([-fPIC],[PIC_FLAGS="-fPIC"])
+fi
+
+#asan and tsan cannot be used together
+if test x$use_asan$use_tsan == xyesyes; then
+  AC_MSG_ERROR(asan and tsan cannot be simultaneously enabled)
+fi
+
+# using asan flag to enable address sanitizer and undefined behavior sanitizer
+if test x$use_asan == xyes; then
+  AX_CHECK_LINK_FLAG([-static-libstdc++],[SAN_LDFLAGS="$SAN_LDFLAGS -static-libstdc++"],[AC_MSG_ERROR(Cannot statically link -static-libstdc++)])
+  AX_CHECK_LINK_FLAG([-static-libasan],[SAN_LDFLAGS="$SAN_LDFLAGS -static-libasan"],[AC_MSG_ERROR(Cannot statically link -static-libasan)])
+  AX_CHECK_COMPILE_FLAG([-fsanitize=address],[SAN_CXXFLAGS="$SAN_CXXFLAGS -fsanitize=address"],[AC_MSG_ERROR(Cannot enable -fsanitize=address)])
+  AX_CHECK_COMPILE_FLAG([-fsanitize=undefined],[SAN_CXXFLAGS="$SAN_CXXFLAGS -fsanitize=undefined"],[AC_MSG_ERROR(Cannot enable -fsanitize=undefined)])
+  AX_CHECK_COMPILE_FLAG([-fno-omit-frame-pointer],[SAN_CXXFLAGS="$SAN_CXXFLAGS -fno-omit-frame-pointer"],[AC_MSG_ERROR(Cannot enable -fno-omit-frame-pointer)])
+fi
+
+# using tsan flag to enable address thread sanitizer
+# TSAN is supported on Linux x84
