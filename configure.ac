@@ -463,4 +463,141 @@ if test x$use_asan == xyes; then
 fi
 
 # using tsan flag to enable address thread sanitizer
-# TSAN is supported on Linux x84
+# TSAN is supported on Linux x84_64 and tested on Ubuntu 12.04
+# Non-position-independent executables are not supported.  Use with -fPIE and -pie flags
+# libc/libstdc++ static linking is not supported
+if test x$use_tsan == xyes; then
+  AX_CHECK_COMPILE_FLAG([-fsanitize=thread],[SAN_CXXFLAGS="$SAN_CXXFLAGS -fsanitize=thread"],[AC_MSG_ERROR(Cannot enable -fsanitize=thread)])
+  AX_CHECK_COMPILE_FLAG([-fno-omit-frame-pointer],[SAN_CXXFLAGS="$SAN_CXXFLAGS -fno-omit-frame-pointer"],[AC_MSG_ERROR(Cannot enable -fno-omit-frame-pointer)])
+fi
+
+if test x$use_hardening != xno; then
+  AX_CHECK_COMPILE_FLAG([-Wformat],[HARDENED_CXXFLAGS="$HARDENED_CXXFLAGS -Wformat"],[AC_MSG_ERROR(Cannot enable -Wformat)])
+  AX_CHECK_COMPILE_FLAG([-Wformat-security],[HARDENED_CXXFLAGS="$HARDENED_CXXFLAGS -Wformat-security"],[AC_MSG_ERROR(Cannot enable -Wformat-security)],[-Wformat])
+  AX_CHECK_COMPILE_FLAG([-Wstack-protector],[HARDENED_CXXFLAGS="$HARDENED_CXXFLAGS -Wstack-protector"],[AC_MSG_ERROR(Cannot enable -Wstack-protector)])
+  AX_CHECK_COMPILE_FLAG([-fstack-protector-all],[HARDENED_CXXFLAGS="$HARDENED_CXXFLAGS -fstack-protector-all"],[AC_MSG_ERROR(Cannot enable -fstack-protector-all)])
+
+  AX_CHECK_PREPROC_FLAG([-D_FORTIFY_SOURCE=2],[
+    AX_CHECK_PREPROC_FLAG([-U_FORTIFY_SOURCE],[
+      HARDENED_CPPFLAGS="$HARDENED_CPPFLAGS -U_FORTIFY_SOURCE"
+    ],[AC_MSG_ERROR(Cannot enable -U_FORTIFY_SOURCE)])
+    HARDENED_CPPFLAGS="$HARDENED_CPPFLAGS -D_FORTIFY_SOURCE=2"
+  ],[AC_MSG_ERROR(Cannot enable -D_FORTIFY_SOURCE=2)])
+
+  if test x$BUILD_OS = xdarwin; then
+    # Xcode's ld (at least ld64-302.3) doesn't support -z
+    AX_CHECK_LINK_FLAG([[-Wl,-z,relro]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,-z,relro"],[AC_MSG_WARN(Cannot enable RELRO)])
+    AX_CHECK_LINK_FLAG([[-Wl,-z,now]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,-z,now"],[AC_MSG_WARN(Cannot enable BIND_NOW)])
+  else
+    if test x$TARGET_OS != xwindows; then
+      AX_CHECK_LINK_FLAG([[-Wl,-z,relro]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,-z,relro"],[AC_MSG_ERROR(Cannot enable RELRO)])
+      AX_CHECK_LINK_FLAG([[-Wl,-z,now]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,-z,now"],[AC_MSG_ERROR(Cannot enable BIND_NOW)])
+    fi
+  fi
+
+  if test x$TARGET_OS != xwindows; then
+    # All windows code is PIC, forcing it on just adds useless compile warnings
+    AX_CHECK_COMPILE_FLAG([-fPIE],[PIE_FLAGS="-fPIE"],[AC_MSG_ERROR(Cannot enable -fPIE)])
+    if test x$BUILD_OS = xdarwin; then
+      AX_CHECK_LINK_FLAG([[-Wl,-pie]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,-pie"],[AC_MSG_ERROR(Cannot enable -Wl,-pie)])
+    else
+      AX_CHECK_LINK_FLAG([[-pie]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -pie"],[AC_MSG_ERROR(Cannot enable -pie)])
+    fi
+  else
+    # These are only available on Windows.
+    AX_CHECK_LINK_FLAG([[-Wl,--dynamicbase]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,--dynamicbase"],[AC_MSG_ERROR(Cannot enable --dynamicbase)])
+    AX_CHECK_LINK_FLAG([[-Wl,--nxcompat]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,--nxcompat"],[AC_MSG_ERROR(Cannot enable --nxcompat)])
+    AX_CHECK_LINK_FLAG([[-Wl,--high-entropy-va]], [HARDENED_LDFLAGS="$HARDENED_LDFLAGS -Wl,--high-entropy-va"],[AC_MSG_ERROR(Cannot enable ASLR)])
+  fi
+
+  case $host in
+    *mingw*)
+       AC_CHECK_LIB([ssp],      [main],, AC_MSG_ERROR(lib missing))
+    ;;
+  esac
+fi
+
+dnl this flag screws up non-darwin gcc even when the check fails. special-case it.
+if test x$TARGET_OS = xdarwin; then
+  AX_CHECK_LINK_FLAG([[-Wl,-dead_strip]], [LDFLAGS="$LDFLAGS -Wl,-dead_strip"])
+fi
+
+AC_CHECK_HEADERS([endian.h sys/endian.h byteswap.h stdio.h stdlib.h unistd.h strings.h sys/types.h sys/stat.h sys/select.h sys/prctl.h])
+AC_SEARCH_LIBS([getaddrinfo_a], [anl], [AC_DEFINE(HAVE_GETADDRINFO_A, 1, [Define this symbol if you have getaddrinfo_a])])
+AC_SEARCH_LIBS([inet_pton], [nsl resolv], [AC_DEFINE(HAVE_INET_PTON, 1, [Define this symbol if you have inet_pton])])
+
+AC_CHECK_DECLS([strnlen])
+
+AC_CHECK_DECLS([le16toh, le32toh, le64toh, htole16, htole32, htole64, be16toh, be32toh, be64toh, htobe16, htobe32, htobe64],,,
+		[#if HAVE_ENDIAN_H
+                 #include <endian.h>
+                 #elif HAVE_SYS_ENDIAN_H
+                 #include <sys/endian.h>
+                 #endif])
+
+AC_CHECK_DECLS([bswap_16, bswap_32, bswap_64],,,
+		[#if HAVE_BYTESWAP_H
+                 #include <byteswap.h>
+                 #endif])
+
+dnl Check for MSG_NOSIGNAL
+AC_MSG_CHECKING(for MSG_NOSIGNAL)
+AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[#include <sys/socket.h>]],
+ [[ int f = MSG_NOSIGNAL; ]])],
+ [ AC_MSG_RESULT(yes); AC_DEFINE(HAVE_MSG_NOSIGNAL, 1,[Define this symbol if you have MSG_NOSIGNAL]) ],
+ [ AC_MSG_RESULT(no)]
+)
+
+AC_MSG_CHECKING([for visibility attribute])
+AC_LINK_IFELSE([AC_LANG_SOURCE([
+  int foo_def( void ) __attribute__((visibility("default")));
+  int main(){}
+  ])],
+  [
+    AC_DEFINE(HAVE_VISIBILITY_ATTRIBUTE,1,[Define if the visibility attribute is supported.])
+    AC_MSG_RESULT(yes)
+  ],
+  [
+    AC_MSG_RESULT(no)
+    if test x$use_reduce_exports = xyes; then
+      AC_MSG_ERROR([Cannot find a working visibility attribute. Use --disable-reduce-exports.])
+    fi
+  ]
+)
+
+if test x$use_reduce_exports = xyes; then
+  AX_CHECK_COMPILE_FLAG([-fvisibility=hidden],[RE_CXXFLAGS="-fvisibility=hidden"],
+  [AC_MSG_ERROR([Cannot set default symbol visibility. Use --disable-reduce-exports.])])
+fi
+
+LEVELDB_CPPFLAGS=
+LIBLEVELDB=
+LIBMEMENV=
+AM_CONDITIONAL([EMBEDDED_LEVELDB],[true])
+AC_SUBST(LEVELDB_CPPFLAGS)
+AC_SUBST(LIBLEVELDB)
+AC_SUBST(LIBMEMENV)
+
+if test x$enable_wallet != xno; then
+    dnl Check for libdb_cxx only if wallet enabled
+    BITCOIN_FIND_BDB62
+fi
+
+dnl Check Qpid Proton headers and library exist
+if test x$use_proton = xyes; then
+  AC_CHECK_HEADERS([proton/connection.hpp],
+    [],
+    [AC_MSG_WARN([Proton headers not found, disabling Proton support])
+    use_proton=no])
+ AC_CHECK_LIB([qpid-proton-cpp], [main],
+    [PROTON_LIBS="-lqpid-proton-cpp -lqpid-proton"],
+    [AC_MSG_WARN([Proton libraries not found, disabling Proton support])
+    use_proton=no])
+fi
+if test x$use_proton = xyes; then
+    AC_DEFINE(ENABLE_PROTON, 1, [Define to 1 to enable Proton functions])
+else
+    AC_DEFINE(ENABLE_PROTON, 0, [Define to 1 to enable Proton functions])
+fi
+
+if test 
