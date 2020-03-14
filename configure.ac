@@ -775,4 +775,189 @@ AC_MSG_CHECKING([whether to build bitcoind])
 AM_CONDITIONAL([BUILD_BITCOIND], [test x$build_bitcoind = xyes])
 AC_MSG_RESULT($build_bitcoind)
 
-AC_MSG_CHECKING([whether to build u
+AC_MSG_CHECKING([whether to build utils (vidulum-cli vidulum-tx)])
+AM_CONDITIONAL([BUILD_BITCOIN_UTILS], [test x$build_bitcoin_utils = xyes])
+AC_MSG_RESULT($build_bitcoin_utils)
+
+AC_MSG_CHECKING([whether to build libraries])
+AM_CONDITIONAL([BUILD_BITCOIN_LIBS], [test x$build_bitcoin_libs = xyes])
+if test x$build_bitcoin_libs = xyes; then
+  AC_DEFINE(HAVE_CONSENSUS_LIB, 1, [Define this symbol if the consensus lib has been built])
+  AC_CONFIG_FILES([libzcashconsensus.pc:libzcashconsensus.pc.in])
+fi
+
+AC_MSG_RESULT($build_bitcoin_libs)
+
+AC_LANG_POP
+
+if test "x$use_ccache" != "xno"; then
+  AC_MSG_CHECKING(if ccache should be used)
+  if test x$CCACHE = x; then
+    if test "x$use_ccache" = "xyes"; then
+      AC_MSG_ERROR([ccache not found.]);
+    else
+      use_ccache=no
+    fi
+  else
+    use_ccache=yes
+    CC="$ac_cv_path_CCACHE $CC"
+    CXX="$ac_cv_path_CCACHE $CXX"
+  fi
+  AC_MSG_RESULT($use_ccache)
+fi
+if test "x$use_ccache" = "xyes"; then
+    AX_CHECK_PREPROC_FLAG([-Qunused-arguments],[CPPFLAGS="-Qunused-arguments $CPPFLAGS"])
+fi
+
+dnl enable wallet
+AC_MSG_CHECKING([if wallet should be enabled])
+if test x$enable_wallet != xno; then
+  AC_MSG_RESULT(yes)
+  AC_DEFINE_UNQUOTED([ENABLE_WALLET],[1],[Define to 1 to enable wallet functions])
+
+else
+  AC_MSG_RESULT(no)
+fi
+
+dnl enable mining
+AC_MSG_CHECKING([if mining should be enabled])
+if test x$enable_mining != xno; then
+  AC_MSG_RESULT(yes)
+  AC_DEFINE(ENABLE_MINING, 1, [Define to 1 to enable mining functions])
+
+else
+  AC_MSG_RESULT(no)
+fi
+
+AM_CONDITIONAL([ENABLE_ZMQ], [test "x$use_zmq" = "xyes"])
+
+AM_CONDITIONAL([ENABLE_PROTON], [test "x$use_proton" = "xyes"])
+
+AC_MSG_CHECKING([whether to build test_bitcoin])
+if test x$use_tests = xyes; then
+  AC_MSG_RESULT([yes])
+  BUILD_TEST="yes"
+else
+  AC_MSG_RESULT([no])
+  BUILD_TEST=""
+fi
+
+AC_MSG_CHECKING([whether to reduce exports])
+if test x$use_reduce_exports = xyes; then
+  AC_MSG_RESULT([yes])
+else
+  AC_MSG_RESULT([no])
+fi
+
+if test x$build_bitcoin_utils$build_bitcoin_libs$build_bitcoind$use_tests = xnononono; then
+  AC_MSG_ERROR([No targets! Please specify at least one of: --with-utils --with-libs --with-daemon or --enable-tests])
+fi
+
+AM_CONDITIONAL([TARGET_DARWIN], [test x$TARGET_OS = xdarwin])
+AM_CONDITIONAL([BUILD_DARWIN], [test x$BUILD_OS = xdarwin])
+AM_CONDITIONAL([TARGET_WINDOWS], [test x$TARGET_OS = xwindows])
+AM_CONDITIONAL([ENABLE_WALLET],[test x$enable_wallet = xyes])
+AM_CONDITIONAL([ENABLE_MINING],[test x$enable_mining = xyes])
+AM_CONDITIONAL([ENABLE_TESTS],[test x$BUILD_TEST = xyes])
+AM_CONDITIONAL([USE_LCOV],[test x$use_lcov = xyes])
+AM_CONDITIONAL([GLIBC_BACK_COMPAT],[test x$use_glibc_compat = xyes])
+AM_CONDITIONAL([HARDEN],[test x$use_hardening = xyes])
+AM_CONDITIONAL([ASAN],[test x$use_asan = xyes])
+AM_CONDITIONAL([TSAN],[test x$use_tsan = xyes])
+
+AC_DEFINE(CLIENT_VERSION_MAJOR, _CLIENT_VERSION_MAJOR, [Major version])
+AC_DEFINE(CLIENT_VERSION_MINOR, _CLIENT_VERSION_MINOR, [Minor version])
+AC_DEFINE(CLIENT_VERSION_REVISION, _CLIENT_VERSION_REVISION, [Build revision])
+AC_DEFINE(CLIENT_VERSION_BUILD, _CLIENT_VERSION_BUILD, [Version Build])
+AC_DEFINE(CLIENT_VERSION_IS_RELEASE, _CLIENT_VERSION_IS_RELEASE, [Version is release])
+AC_DEFINE(COPYRIGHT_YEAR, _COPYRIGHT_YEAR, [Version is release])
+AC_SUBST(CLIENT_VERSION_MAJOR, _CLIENT_VERSION_MAJOR)
+AC_SUBST(CLIENT_VERSION_MINOR, _CLIENT_VERSION_MINOR)
+AC_SUBST(CLIENT_VERSION_REVISION, _CLIENT_VERSION_REVISION)
+AC_SUBST(CLIENT_VERSION_BUILD, _CLIENT_VERSION_BUILD)
+AC_SUBST(CLIENT_VERSION_IS_RELEASE, _CLIENT_VERSION_IS_RELEASE)
+AC_SUBST(COPYRIGHT_YEAR, _COPYRIGHT_YEAR)
+AC_SUBST(BITCOIN_DAEMON_NAME)
+AC_SUBST(BITCOIN_CLI_NAME)
+AC_SUBST(BITCOIN_TX_NAME)
+
+AC_SUBST(RELDFLAGS)
+AC_SUBST(ERROR_CXXFLAGS)
+AC_SUBST(SAN_CXXFLAGS)
+AC_SUBST(SAN_LDFLAGS)
+AC_SUBST(HARDENED_CXXFLAGS)
+AC_SUBST(HARDENED_CPPFLAGS)
+AC_SUBST(HARDENED_LDFLAGS)
+AC_SUBST(PIC_FLAGS)
+AC_SUBST(PIE_FLAGS)
+AC_SUBST(LIBTOOL_APP_LDFLAGS)
+AC_SUBST(BOOST_LIBS)
+AC_SUBST(TESTDEFS)
+AC_SUBST(LEVELDB_TARGET_FLAGS)
+AC_SUBST(CRYPTO_LIBS)
+AC_SUBST(SSL_LIBS)
+AC_SUBST(EVENT_LIBS)
+AC_SUBST(EVENT_PTHREADS_LIBS)
+AC_SUBST(ZMQ_LIBS)
+AC_SUBST(GMP_LIBS)
+AC_SUBST(GMPXX_LIBS)
+AC_SUBST(LIBSNARK_DEPINST)
+AC_SUBST(libzcash_LIBS)
+AC_SUBST(PROTON_LIBS)
+AC_CONFIG_FILES([Makefile src/Makefile doc/man/Makefile src/test/buildenv.py])
+AC_CONFIG_FILES([qa/pull-tester/run-bitcoind-for-test.sh],[chmod +x qa/pull-tester/run-bitcoind-for-test.sh])
+AC_CONFIG_FILES([qa/pull-tester/tests-config.sh],[chmod +x qa/pull-tester/tests-config.sh])
+
+dnl boost's m4 checks do something really nasty: they export these vars. As a
+dnl result, they leak into secp256k1's configure and crazy things happen.
+dnl Until this is fixed upstream and we've synced, we'll just un-export them.
+CPPFLAGS_TEMP="$CPPFLAGS"
+unset CPPFLAGS
+CPPFLAGS="$CPPFLAGS_TEMP"
+
+LDFLAGS_TEMP="$LDFLAGS"
+unset LDFLAGS
+LDFLAGS="$LDFLAGS_TEMP"
+
+LIBS_TEMP="$LIBS"
+unset LIBS
+LIBS="$LIBS_TEMP"
+
+PKGCONFIG_PATH_TEMP="$PKG_CONFIG_PATH"
+unset PKG_CONFIG_PATH
+PKG_CONFIG_PATH="$PKGCONFIG_PATH_TEMP"
+
+PKGCONFIG_LIBDIR_TEMP="$PKG_CONFIG_LIBDIR"
+unset PKG_CONFIG_LIBDIR
+PKG_CONFIG_LIBDIR="$PKGCONFIG_LIBDIR_TEMP"
+
+ac_configure_args="${ac_configure_args} --disable-shared --with-pic --with-bignum=no --enable-module-recovery"
+AC_CONFIG_SUBDIRS([src/secp256k1 src/snark src/univalue])
+
+AC_OUTPUT
+
+dnl Taken from https://wiki.debian.org/RpathIssue
+case $host in
+   *-*-linux-gnu)
+     AC_MSG_RESULT([Fixing libtool for -rpath problems.])
+     sed < libtool > libtool-2 \
+     's/^hardcode_libdir_flag_spec.*$'/'hardcode_libdir_flag_spec=" -D__LIBTOOL_IS_A_FOOL__ "/'
+     mv libtool-2 libtool
+     chmod 755 libtool
+   ;;
+esac
+
+echo 
+echo "Options used to compile and link:"
+echo "  with wallet   = $enable_wallet"
+echo "  with proton   = $use_proton"
+echo "  with zmq      = $use_zmq"
+echo "  with test     = $use_tests"
+echo "  debug enabled = $enable_debug"
+echo "  werror        = $enable_werror"
+echo 
+echo "  target os     = $TARGET_OS"
+echo "  build os      = $BUILD_OS"
+echo
+echo "  CC            = $CC"
+echo "  CFLAGS        = $CFL
