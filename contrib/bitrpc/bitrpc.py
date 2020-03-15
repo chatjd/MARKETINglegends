@@ -199,4 +199,137 @@ elif cmd == "listreceivedbyaccount":
 elif cmd == "listreceivedbyaddress":
     try:
         mc = raw_input("Minimum confirmations (optional): ")
-    
+        incemp = raw_input("Include empty? (true/false, optional): ")
+        try:
+            print access.listreceivedbyaddress(mc, incemp)
+        except:
+            print access.listreceivedbyaddress()
+    except Exception as inst:
+        print inst
+
+elif cmd == "listtransactions":
+    try:
+        acct = raw_input("Account (optional): ")
+        count = raw_input("Number of transactions (optional): ")
+        frm = raw_input("Skip (optional):")
+        try:
+            print access.listtransactions(acct, count, frm)
+        except:
+            print access.listtransactions()
+    except Exception as inst:
+        print inst
+
+elif cmd == "move":
+    try:
+        frm = raw_input("From: ")
+        to = raw_input("To: ")
+        amt = raw_input("Amount:")
+        mc = raw_input("Minimum confirmations (optional): ")
+        comment = raw_input("Comment (optional): ")
+        try:
+            print access.move(frm, to, amt, mc, comment)
+        except:
+            print access.move(frm, to, amt)
+    except Exception as inst:
+        print inst
+
+elif cmd == "sendfrom":
+    try:
+        frm = raw_input("From: ")
+        to = raw_input("To: ")
+        amt = raw_input("Amount:")
+        mc = raw_input("Minimum confirmations (optional): ")
+        comment = raw_input("Comment (optional): ")
+        commentto = raw_input("Comment-to (optional): ")
+        try:
+            print access.sendfrom(frm, to, amt, mc, comment, commentto)
+        except:
+            print access.sendfrom(frm, to, amt)
+    except Exception as inst:
+        print inst
+
+elif cmd == "sendmany":
+    try:
+        frm = raw_input("From: ")
+        to = raw_input("To (in format address1:amount1,address2:amount2,...): ")
+        mc = raw_input("Minimum confirmations (optional): ")
+        comment = raw_input("Comment (optional): ")
+        try:
+            print access.sendmany(frm,to,mc,comment)
+        except:
+            print access.sendmany(frm,to)
+    except Exception as inst:
+        print inst
+
+elif cmd == "sendtoaddress":
+    try:
+        to = raw_input("To (in format address1:amount1,address2:amount2,...): ")
+        amt = raw_input("Amount:")
+        comment = raw_input("Comment (optional): ")
+        commentto = raw_input("Comment-to (optional): ")
+        try:
+            print access.sendtoaddress(to,amt,comment,commentto)
+        except:
+            print access.sendtoaddress(to,amt)
+    except Exception as inst:
+        print inst
+
+elif cmd == "setaccount":
+    try:
+        addr = raw_input("Address: ")
+        acct = raw_input("Account:")
+        print access.setaccount(addr,acct)
+    except Exception as inst:
+        print inst
+
+elif cmd == "setgenerate":
+    try:
+        gen= raw_input("Generate? (true/false): ")
+        cpus = raw_input("Max processors/cores (-1 for unlimited, optional):")
+        try:
+            print access.setgenerate(gen, cpus)
+        except:
+            print access.setgenerate(gen)
+    except Exception as inst:
+        print inst
+
+elif cmd == "settxfee":
+    try:
+        amt = raw_input("Amount:")
+        print access.settxfee(amt)
+    except Exception as inst:
+        print inst
+
+elif cmd == "stop":
+    try:
+        print access.stop()
+    except Exception as inst:
+        print inst
+
+elif cmd == "validateaddress":
+    try:
+        addr = raw_input("Address: ")
+        print access.validateaddress(addr)
+    except Exception as inst:
+        print inst
+
+elif cmd == "walletpassphrase":
+    try:
+        pwd = getpass.getpass(prompt="Enter wallet passphrase: ")
+        access.walletpassphrase(pwd, 60)
+        print "\n---Wallet unlocked---\n"
+    except Exception as inst:
+        print inst
+
+elif cmd == "walletpassphrasechange":
+    try:
+        pwd = getpass.getpass(prompt="Enter old wallet passphrase: ")
+        pwd2 = getpass.getpass(prompt="Enter new wallet passphrase: ")
+        access.walletpassphrasechange(pwd, pwd2)
+        print
+        print "\n---Passphrase changed---\n"
+    except Exception as inst:
+        print inst
+
+else:
+    print "Command not found or not supported"
