@@ -42,4 +42,21 @@ c. When adding workers start by adding workers for the "most common"
 
 - Run `ansible-playbook -e buildbot_worker_host_template=templates/host.ec2.j2 -i inventory/hosts unix.yml`,
   passing in the worker's Buildbot name and password.
-  - After a successful run, the worker should be connecte
+  - After a successful run, the worker should be connected to dev-ci.vidulum.org and
+    visible in its worker list.
+
+- Create an AMI from the instance. This is the worker AMI to put into the
+  master.cfg for dev-ci.vidulum.org.
+  - 16 GB of storage should be sufficient.
+
+- SSH into the instance, and edit the worker config to connect to ci.vidulum.org.
+
+- Create an AMI from the instance. This is the worker AMI to put into the
+  master.cfg for ci.vidulum.org.
+  - 16 GB of storage should be sufficient.
+
+- Delete the instance (it is no longer needed).
+
+- Edit the master.cfg to turn the new worker into a latent (using the new AMI
+  IDs), add it to the appropriate worker groups, set up new builders etc.
+  - Deploy this via the normal PR review process.
