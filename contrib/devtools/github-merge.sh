@@ -136,4 +136,46 @@ else
   echo "Dropping you on a shell so you can try building/testing the merged source." >&2
   echo "Run 'git diff HEAD~' to show the changes being merged." >&2
   echo "Type 'exit' when done." >&2
-  if [[ -f 
+  if [[ -f /etc/debian_version ]]; then # Show pull number in prompt on Debian default prompt
+      export debian_chroot="$PULL"
+  fi
+  bash -i
+  read -p "Press 'm' to accept the merge. " -n 1 -r >&2
+  echo
+  if [[ "d$REPLY" =~ ^d[Mm]$ ]]; then
+    echo "Merge accepted." >&2
+  else
+    echo "ERROR: Merge rejected." >&2
+    cleanup
+    exit 7
+  fi
+fi
+
+# Sign the merge commit.
+read -p "Press 's' to sign off on the merge. " -n 1 -r >&2
+echo
+if [[ "d$REPLY" =~ ^d[Ss]$ ]]; then
+  if [[ "$(git config --get user.signingkey)" == "" ]]; then
+    echo "ERROR: No GPG signing key set, not signing. Set one using:" >&2
+    echo "git config --global user.signingkey <key>" >&2
+    cleanup
+    exit 1
+  else
+    git commit -q --gpg-sign --amend --no-edit
+  fi
+else
+  echo "Not signing off on merge, exiting."
+  cleanup
+  exit 1
+fi
+
+# Clean up temporary branches, and put the result in $BRANCH.
+git checkout -q "$BRANCH"
+git reset -q --hard pull/"$PULL"/local-merge
+cleanup
+
+# Push the result.
+read -p "Type 'push' to push the result to $HOST:$REPO, branch $BRANCH. " -r >&2
+if [[ "d$REPLY" =~ ^d[Pp][Uu][Ss][Hh]$ ]]; then
+  git push "$HOST":"$REPO" refs/heads/"$BRANCH"
+fi
