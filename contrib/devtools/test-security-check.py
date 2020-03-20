@@ -37,4 +37,24 @@ class TestSecurityChecks(unittest.TestCase):
                 (1, executable+': failed PIE RELRO Canary'))
         self.assertEqual(call_security_check(cc, source, executable, ['-Wl,-znoexecstack','-fstack-protector-all','-Wl,-znorelro']), 
                 (1, executable+': failed PIE RELRO'))
-        self.assertEqual(ca
+        self.assertEqual(call_security_check(cc, source, executable, ['-Wl,-znoexecstack','-fstack-protector-all','-Wl,-znorelro','-pie','-fPIE']), 
+                (1, executable+': failed RELRO'))
+        self.assertEqual(call_security_check(cc, source, executable, ['-Wl,-znoexecstack','-fstack-protector-all','-Wl,-zrelro','-Wl,-z,now','-pie','-fPIE']), 
+                (0, ''))
+
+    def test_PE(self):
+        source = 'test1.c'
+        executable = 'test1.exe'
+        cc = 'i686-w64-mingw32-gcc'
+        write_testcode(source)
+
+        self.assertEqual(call_security_check(cc, source, executable, []), 
+                (1, executable+': failed PIE NX'))
+        self.assertEqual(call_security_check(cc, source, executable, ['-Wl,--nxcompat']), 
+                (1, executable+': failed PIE'))
+        self.assertEqual(call_security_check(cc, source, executable, ['-Wl,--nxcompat','-Wl,--dynamicbase']), 
+                (0, ''))
+
+if __name__ == '__main__':
+    unittest.main()
+
