@@ -278,4 +278,26 @@ if __name__ == '__main__':
 	if 'split_timestamp' not in settings:
 		settings['split_timestamp'] = 0
 	if 'max_out_sz' not in settings:
-		set
+		settings['max_out_sz'] = 1000L * 1000 * 1000
+	if 'out_of_order_cache_sz' not in settings:
+		settings['out_of_order_cache_sz'] = 100 * 1000 * 1000
+
+	settings['max_out_sz'] = long(settings['max_out_sz'])
+	settings['split_timestamp'] = int(settings['split_timestamp'])
+	settings['file_timestamp'] = int(settings['file_timestamp'])
+	settings['netmagic'] = settings['netmagic'].decode('hex')
+	settings['out_of_order_cache_sz'] = int(settings['out_of_order_cache_sz'])
+
+	if 'output_file' not in settings and 'output' not in settings:
+		print("Missing output file / directory")
+		sys.exit(1)
+
+	blkindex = get_block_hashes(settings)
+	blkmap = mkblockmap(blkindex)
+
+	if not settings['genesis'] in blkmap:
+		print("Genesis block not found in hashlist")
+	else:
+		BlockDataCopier(settings, blkindex, blkmap).run()
+
+
