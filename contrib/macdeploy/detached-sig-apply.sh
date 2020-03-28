@@ -39,4 +39,14 @@ find ${TEMPDIR} -name "*.sign" | while read i; do
 
   OFFSET=`${PAGESTUFF} "${i}.tmp" -p | tail -2 | grep offset | sed 's/[^0-9]*//g'`
   if [ -z ${QUIET} ]; then
-    echo "Attaching 
+    echo "Attaching signature at offset ${OFFSET}"
+  fi
+
+  dd if="$i" of="${i}.tmp" bs=1 seek=${OFFSET} count=${SIZE} 2>/dev/null
+  mv "${i}.tmp" "${TARGET_FILE}"
+  rm "${i}"
+  echo "Success."
+done
+mv ${TEMPDIR}/${ROOTDIR} ${OUTDIR}
+rm -rf ${TEMPDIR}
+echo "Signed: ${OUTDIR}"
