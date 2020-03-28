@@ -1,9 +1,9 @@
-package=crate_futures_cpupool
-$(package)_crate_name=futures-cpupool
-$(package)_version=0.1.8
+package=crate_winapi
+$(package)_crate_name=winapi
+$(package)_version=0.3.4
 $(package)_download_path=https://static.crates.io/crates/$($(package)_crate_name)
 $(package)_file_name=$($(package)_crate_name)-$($(package)_version).crate
-$(package)_sha256_hash=ab90cde24b3319636588d0c35fe03b1333857621051837ed769faefb4c2162e4
+$(package)_sha256_hash=04e3bd221fcbe8a271359c04f21a76db7d0c6028862d1bb5512d85e1e2eb5bb3
 $(package)_crate_versioned_name=$($(package)_crate_name)
 
 define $(package)_preprocess_cmds

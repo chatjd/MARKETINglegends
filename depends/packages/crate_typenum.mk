@@ -1,9 +1,10 @@
-package=crate_futures_cpupool
-$(package)_crate_name=futures-cpupool
-$(package)_version=0.1.8
+
+package=crate_typenum
+$(package)_crate_name=typenum
+$(package)_version=1.10.0
 $(package)_download_path=https://static.crates.io/crates/$($(package)_crate_name)
 $(package)_file_name=$($(package)_crate_name)-$($(package)_version).crate
-$(package)_sha256_hash=ab90cde24b3319636588d0c35fe03b1333857621051837ed769faefb4c2162e4
+$(package)_sha256_hash=612d636f949607bdf9b123b4a6f6d966dedf3ff669f7f045890d3a4a73948169
 $(package)_crate_versioned_name=$($(package)_crate_name)
 
 define $(package)_preprocess_cmds
