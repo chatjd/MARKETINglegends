@@ -38,4 +38,7 @@ try:
             print binascii.hexlify(body[:80])
         elif topic == "rawtx":
             print '- RAW TX ('+sequence+') -'
-    
+            print binascii.hexlify(body)
+
+except KeyboardInterrupt:
+    zmqContext.destroy()
