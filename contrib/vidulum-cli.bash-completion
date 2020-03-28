@@ -1,0 +1,59 @@
+# bash programmable completion for vidulum-cli(1)
+# Copyright (c) 2012-2016 The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+# call $vidulum-cli for RPC
+_vidulum_rpc() {
+    # determine already specified args necessary for RPC
+    local rpcargs=()
+    for i in ${COMP_LINE}; do
+        case "$i" in
+            -conf=*|-datadir=*|-regtest|-rpc*|-testnet)
+                rpcargs=( "${rpcargs[@]}" "$i" )
+                ;;
+        esac
+    done
+    $vidulum_cli "${rpcargs[@]}" "$@"
+}
+
+# Add wallet accounts to COMPREPLY
+_vidulum_accounts() {
+    local accounts
+    # Accounts are deprecated in Vidulum
+    #accounts=$(_vidulum_rpc listaccounts | awk -F '"' '{ print $2 }')
+    accounts="\\\"\\\""
+    COMPREPLY=( "${COMPREPLY[@]}" $( compgen -W "$accounts" -- "$cur" ) )
+}
+
+_vidulum_cli() {
+    local cur prev words=() cword
+    local vidulum_cli
+
+    # save and use original argument to invoke vidulum-cli for -help, help and RPC
+    # as vidulum-cli might not be in $PATH
+    vidulum_cli="$1"
+
+    COMPREPLY=()
+    _get_comp_words_by_ref -n = cur prev words cword
+
+    if ((cword > 5)); then
+        case ${words[cword-5]} in
+            sendtoaddress)
+                COMPREPLY=( $( compgen -W "true false" -- "$cur" ) )
+                return 0
+                ;;
+        esac
+    fi
+
+    if ((cword > 4)); then
+        case ${words[cword-4]} in
+            importaddress|listtransactions|setban)
+                COMPREPLY=( $( compgen -W "true false" -- "$cur" ) )
+                return 0
+                ;;
+            signrawtransaction)
+                COMPREPLY=( $( compgen -W "ALL NONE SINGLE ALL|ANYONECANPAY NONE|ANYONECANPAY SINGLE|ANYONECANPAY" -- "$cur" ) )
+                return 0
+                ;;
+   
