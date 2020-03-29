@@ -11,4 +11,5 @@ define $(package)_preprocess_cmds
 endef
 
 define $(package)_stage_cmds
-  
+  $(call vendor_crate_source,$(package))
+endef
