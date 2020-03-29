@@ -1,0 +1,218 @@
+
+diff --git a/Cargo.lock b/Cargo.lock
+index bc740bb..3c6c94b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -28,22 +28,6 @@ dependencies = [
+  "stream-cipher 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ ]
+ 
+-[[package]]
+-name = "aho-corasick"
+-version = "0.6.8"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "memchr 2.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "ansi_term"
+-version = "0.11.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "winapi 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+ [[package]]
+ name = "arrayvec"
+ version = "0.4.7"
+@@ -52,27 +36,6 @@ dependencies = [
+  "nodrop 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
+ ]
+ 
+-[[package]]
+-name = "backtrace"
+-version = "0.3.9"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "backtrace-sys 0.1.24 (registry+https://github.com/rust-lang/crates.io-index)",
+- "cfg-if 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+- "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
+- "rustc-demangle 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)",
+- "winapi 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "backtrace-sys"
+-version = "0.1.24"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "cc 1.0.22 (registry+https://github.com/rust-lang/crates.io-index)",
+- "libc 0.2.40 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+ [[package]]
+ name = "bellman"
+ version = "0.1.0"
+@@ -92,11 +55,6 @@ name = "bit-vec"
+ version = "0.4.4"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ 
+-[[package]]
+-name = "bitflags"
+-version = "0.9.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-
+ [[package]]
+ name = "bitflags"
+ version = "1.0.1"
+@@ -130,61 +88,6 @@ name = "byteorder"
+ version = "1.2.2"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ 
+-[[package]]
+-name = "cargo_metadata"
+-version = "0.5.8"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "error-chain 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+- "semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+- "serde 1.0.75 (registry+https://github.com/rust-lang/crates.io-index)",
+- "serde_derive 1.0.75 (registry+https://github.com/rust-lang/crates.io-index)",
+- "serde_json 1.0.26 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "cc"
+-version = "1.0.22"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-
+-[[package]]
+-name = "cfg-if"
+-version = "0.1.5"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-
+-[[package]]
+-name = "clippy"
+-version = "0.0.200"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "ansi_term 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
+- "clippy_lints 0.0.200 (registry+https://github.com/rust-lang/crates.io-index)",
+- "regex 1.0.4 (registry+https://github.com/rust-lang/crates.io-index)",
+- "rustc_version 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
+- "semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "clippy_lints"
+-version = "0.0.200"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "cargo_metadata 0.5.8 (registry+https://github.com/rust-lang/crates.io-index)",
+- "if_chain 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
+- "itertools 0.7.8 (registry+https://github.com/rust-lang/crates.io-index)",
+- "lazy_static 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
+- "matches 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+- "pulldown-cmark 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
+- "quine-mc_cluskey 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)",
+- "regex-syntax 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+- "semver 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+- "serde 1.0.75 (registry+https://github.com/rust-lang/crates.io-index)",
+- "serde_derive 1.0.75 (registry+https://github.com/rust-lang/crates.io-index)",
+- "toml 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
+- "unicode-normalization 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
+- "url 1.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+ [[package]]
+ name = "constant_time_eq"
+ version = "0.1.3"
+@@ -203,19 +106,6 @@ dependencies = [
+  "generic-array 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ ]
+ 
+-[[package]]
+-name = "either"
+-version = "1.5.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-
+-[[package]]
+-name = "error-chain"
+-version = "0.11.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "backtrace 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+ [[package]]
+ name = "fpe"
+ version = "0.1.0"
+@@ -256,11 +146,6 @@ dependencies = [
+  "num_cpus 1.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ ]
+ 
+-[[package]]
+-name = "gcc"
+-version = "0.3.54"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-
+ [[package]]
+ name = "generic-array"
+ version = "0.9.0"
+@@ -269,59 +154,6 @@ dependencies = [
+  "typenum 1.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ ]
+ 
+-[[package]]
+-name = "getopts"
+-version = "0.2.18"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "unicode-width 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "hex-literal"
+-version = "0.1.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "hex-literal-impl 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+- "proc-macro-hack 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "hex-literal-impl"
+-version = "0.1.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "proc-macro-hack 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "idna"
+-version = "0.1.5"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "matches 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+- "unicode-bidi 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+- "unicode-normalization 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "if_chain"
+-version = "0.1.3"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-
+-[[package]]
+-name = "itertools"
+-version = "0.7.8"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-dependencies = [
+- "either 1.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
+-]
+-
+-[[package]]
+-name = "itoa"
+-version = "0.4.2"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
