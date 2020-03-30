@@ -1,0 +1,149 @@
+From 03f5fc0826115edbfca468261b70c0daf627f488 Mon Sep 17 00:00:00 2001
+From: Simon <simon@bitcartel.com>
+Date: Thu, 27 Apr 2017 17:15:59 -0700
+Subject: [PATCH] Enable C++11, build static library and cpp bindings with minimal dependencies.
+
+---
+ CMakeLists.txt                            | 13 +++++++------
+ examples/cpp/CMakeLists.txt               |  1 +
+ proton-c/CMakeLists.txt                   | 32 +++++++++++++++----------------
+ proton-c/bindings/CMakeLists.txt          |  6 +++---
+ proton-c/bindings/cpp/CMakeLists.txt      | 24 +++++++++++------------
+ proton-c/bindings/cpp/docs/CMakeLists.txt |  2 +-
+ proton-c/docs/api/CMakeLists.txt          |  2 +-
+ 7 files changed, 41 insertions(+), 39 deletions(-)
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b538ffd..4a5e787 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -18,14 +18,15 @@
+ #
+ cmake_minimum_required (VERSION 2.8.7)
+ 
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+ project (Proton C)
+ 
+ # Enable C++ now for examples and bindings subdirectories, but make it optional.
+ enable_language(CXX OPTIONAL)
+ 
+ # Enable testing
+-enable_testing()
+-include (CTest)
++#enable_testing()
++#include (CTest)
+ 
+ # Pull in local cmake modules
+ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/tools/cmake/Modules/")
+@@ -141,7 +142,7 @@ set (BINDINGS_DIR ${LIB_INSTALL_DIR}/proton/bindings)
+ 
+ set (SYSINSTALL_BINDINGS OFF CACHE BOOL "If SYSINSTALL_BINDINGS is OFF then proton bindings will be installed underneath ${BINDINGS_DIR} and each user will need to modify their interpreter configuration to load the appropriate binding. If SYSINSTALL_BINDINGS is ON, then each language interpreter will be queried for the appropriate directory and proton bindings will be installed and available system wide with no additional per user configuration.")
+ 
+-set (BINDING_LANGS PERL PHP PYTHON RUBY)
++#set (BINDING_LANGS PERL PHP PYTHON RUBY)
+ 
+ foreach (LANG ${BINDING_LANGS})
+   set (SYSINSTALL_${LANG} OFF CACHE BOOL "Install ${LANG} bindings into interpreter specified location.")
+@@ -156,10 +157,10 @@ set (PROTON_SHARE ${SHARE_INSTALL_DIR}/proton-${PN_VERSION})
+ # End of variables used during install
+ 
+ # Check for valgrind here so tests under proton-c/ and examples/ can use it.
+-find_program(VALGRIND_EXE valgrind DOC "Location of the valgrind program")
++#find_program(VALGRIND_EXE valgrind DOC "Location of the valgrind program")
+ mark_as_advanced (VALGRIND_EXE)
+ 
+-option(ENABLE_VALGRIND "Use valgrind to detect run-time problems" ON)
++#option(ENABLE_VALGRIND "Use valgrind to detect run-time problems" ON)
+ if (ENABLE_VALGRIND)
+   if (NOT VALGRIND_EXE)
+     message(STATUS "Can't locate the valgrind command; no run-time error detection")
+@@ -171,7 +172,7 @@ if (ENABLE_VALGRIND)
+ endif (ENABLE_VALGRIND)
+ 
+ add_subdirectory(proton-c)
+-add_subdirectory(examples)
++#add_subdirectory(examples)
+ 
+ install (FILES LICENSE README.md
+          DESTINATION ${PROTON_SHARE})
+diff --git a/examples/cpp/CMakeLists.txt b/examples/cpp/CMakeLists.txt
+index 304d899..f4877b4 100644
+--- a/examples/cpp/CMakeLists.txt
++++ b/examples/cpp/CMakeLists.txt
+@@ -17,6 +17,7 @@
+ # under the License.
+ #
+ 
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+ find_package(ProtonCpp REQUIRED)
+ 
+ include_directories(${ProtonCpp_INCLUDE_DIRS})
+diff --git a/proton-c/CMakeLists.txt b/proton-c/CMakeLists.txt
+index 8edb661..dc7b99c 100644
+--- a/proton-c/CMakeLists.txt
++++ b/proton-c/CMakeLists.txt
+@@ -22,24 +22,24 @@ include(CheckSymbolExists)
+ 
+ include(soversion.cmake)
+ 
+-add_custom_target(docs)
+-add_custom_target(doc DEPENDS docs)
++#add_custom_target(docs)
++#add_custom_target(doc DEPENDS docs)
+ 
+ # Set the default SSL/TLS implementation
+-find_package(OpenSSL)
++#find_package(OpenSSL)
+ find_package(PythonInterp REQUIRED)
+-find_package(SWIG)
++#find_package(SWIG)
+ # FindSwig.cmake "forgets" make its outputs advanced like a good citizen
+ mark_as_advanced(SWIG_DIR SWIG_EXECUTABLE SWIG_VERSION)
+ 
+ # See if Cyrus SASL is available
+-find_library(CYRUS_SASL_LIBRARY sasl2)
+-find_path(CYRUS_SASL_INCLUDE_DIR sasl/sasl.h PATH_SUFFIXES include)
+-find_package_handle_standard_args(CyrusSASL DEFAULT_MSG CYRUS_SASL_LIBRARY CYRUS_SASL_INCLUDE_DIR)
++#find_library(CYRUS_SASL_LIBRARY sasl2)
++#find_path(CYRUS_SASL_INCLUDE_DIR sasl/sasl.h PATH_SUFFIXES include)
++#find_package_handle_standard_args(CyrusSASL DEFAULT_MSG CYRUS_SASL_LIBRARY CYRUS_SASL_INCLUDE_DIR)
+ mark_as_advanced(CYRUS_SASL_LIBRARY CYRUS_SASL_INCLUDE_DIR)
+ 
+ # Find saslpasswd2 executable to generate test config
+-find_program(SASLPASSWD_EXE saslpasswd2 DOC "Program used to make SASL user db for testing")
++#find_program(SASLPASSWD_EXE saslpasswd2 DOC "Program used to make SASL user db for testing")
+ mark_as_advanced(SASLPASSWD_EXE)
+ 
+ if(WIN32 AND NOT CYGWIN)
+@@ -315,8 +315,8 @@ pn_absolute_install_dir(EXEC_PREFIX "." ${CMAKE_INSTALL_PREFIX})
+ pn_absolute_install_dir(LIBDIR ${LIB_INSTALL_DIR} ${CMAKE_INSTALL_PREFIX})
+ pn_absolute_install_dir(INCLUDEDIR ${INCLUDE_INSTALL_DIR} ${CMAKE_INSTALL_PREFIX})
+ 
+-add_subdirectory(docs/api)
+-add_subdirectory(../tests/tools/apps/c ../tests/tools/apps/c)
++#add_subdirectory(docs/api)
++#add_subdirectory(../tests/tools/apps/c ../tests/tools/apps/c)
+ 
+ # for full source distribution:
+ set (qpid-proton-platform-all
+@@ -507,7 +507,7 @@ if (BUILD_WITH_CXX)
+ endif (BUILD_WITH_CXX)
+ 
+ add_library (
+-  qpid-proton-core SHARED
++  qpid-proton-core STATIC
+   ${qpid-proton-core}
+   ${qpid-proton-layers}
+   ${qpid-proton-platform}
+@@ -527,7 +527,7 @@ set_target_properties (
+   )
+ 
+ add_library(
+-  qpid-proton SHARED
++  qpid-proton STATIC
+   # Proton Core
+   ${qpid-proton-core}
+   ${qpid-proton-layers}
+@@ -629,7 +629,7 @@ install (FILES
+ 
+ # c t
