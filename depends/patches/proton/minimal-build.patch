@@ -146,4 +146,143 @@ index 8edb661..dc7b99c 100644
    ${qpid-proton-layers}
 @@ -629,7 +629,7 @@ install (FILES
  
- # c t
+ # c tests:
+ 
+-add_subdirectory(src/tests)
++#add_subdirectory(src/tests)
+ 
+ if (CMAKE_SYSTEM_NAME STREQUAL Windows)
+   # No change needed for windows already use correct separator
+@@ -712,7 +712,7 @@ if (BUILD_PYTHON)
+ 
+ endif (BUILD_PYTHON)
+ 
+-find_program(RUBY_EXE "ruby")
++#find_program(RUBY_EXE "ruby")
+ if (RUBY_EXE AND BUILD_RUBY)
+   set (rb_root "${pn_test_root}/ruby")
+   set (rb_src "${CMAKE_CURRENT_SOURCE_DIR}/bindings/ruby")
+@@ -751,8 +751,8 @@ if (RUBY_EXE AND BUILD_RUBY)
+   else (DEFAULT_RUBY_TESTING)
+     message(STATUS "Skipping Ruby tests: missing dependencies")
+   endif (DEFAULT_RUBY_TESTING)
+-else (RUBY_EXE)
+-  message (STATUS "Cannot find ruby, skipping ruby tests")
++#else (RUBY_EXE)
++#  message (STATUS "Cannot find ruby, skipping ruby tests")
+ endif()
+ 
+ mark_as_advanced (RUBY_EXE RSPEC_EXE)
+diff --git a/proton-c/bindings/CMakeLists.txt b/proton-c/bindings/CMakeLists.txt
+index 6b88384..d1a50a5 100644
+--- a/proton-c/bindings/CMakeLists.txt
++++ b/proton-c/bindings/CMakeLists.txt
+@@ -19,14 +19,14 @@
+ 
+ # Add bindings that do not require swig here - the directory name must be the same as the binding name
+ # See below for swig bindings
+-set(BINDINGS javascript cpp go)
++set(BINDINGS cpp)
+ 
+ # Prerequisites for javascript.
+ #
+ # It uses a C/C++ to JavaScript cross-compiler called emscripten (https://github.com/kripken/emscripten). Emscripten takes C/C++
+ # and compiles it into a highly optimisable subset of JavaScript called asm.js (http://asmjs.org/) that can be
+ # aggressively optimised and run at near-native speed (usually between 1.5 to 10 times slower than native C/C++).
+-find_package(Emscripten)
++#find_package(Emscripten)
+ if (EMSCRIPTEN_FOUND)
+   set (DEFAULT_JAVASCRIPT ON)
+ endif (EMSCRIPTEN_FOUND)
+@@ -37,7 +37,7 @@ if (CMAKE_CXX_COMPILER)
+ endif (CMAKE_CXX_COMPILER)
+ 
+ # Prerequisites for Go
+-find_program(GO_EXE go)
++#find_program(GO_EXE go)
+ mark_as_advanced(GO_EXE)
+ if (GO_EXE)
+   if(WIN32)
+diff --git a/proton-c/bindings/cpp/CMakeLists.txt b/proton-c/bindings/cpp/CMakeLists.txt
+index 0cc4024..796fe29 100644
+--- a/proton-c/bindings/cpp/CMakeLists.txt
++++ b/proton-c/bindings/cpp/CMakeLists.txt
+@@ -16,7 +16,7 @@
+ # specific language governing permissions and limitations
+ # under the License.
+ #
+-
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+ include(cpp.cmake) # Compiler checks
+ 
+ include_directories(
+@@ -89,7 +89,7 @@ set_source_files_properties (
+   COMPILE_FLAGS "${LTO}"
+   )
+ 
+-add_library(qpid-proton-cpp SHARED ${qpid-proton-cpp-source})
++add_library(qpid-proton-cpp STATIC ${qpid-proton-cpp-source})
+ 
+ target_link_libraries (qpid-proton-cpp ${PLATFORM_LIBS} qpid-proton)
+ 
+@@ -120,8 +120,8 @@ endif (MSVC)
+ 
+ install (DIRECTORY "include/proton" DESTINATION ${INCLUDE_INSTALL_DIR} FILES_MATCHING PATTERN "*.hpp")
+ 
+-add_subdirectory(docs)
+-add_subdirectory(${CMAKE_SOURCE_DIR}/tests/tools/apps/cpp ${CMAKE_BINARY_DIR}/tests/tools/apps/cpp)
++#add_subdirectory(docs)
++#add_subdirectory(${CMAKE_SOURCE_DIR}/tests/tools/apps/cpp ${CMAKE_BINARY_DIR}/tests/tools/apps/cpp)
+ 
+ # Pkg config file
+ configure_file(
+@@ -171,12 +171,12 @@ macro(add_cpp_test test)
+   endif ()
+ endmacro(add_cpp_test)
+ 
+-add_cpp_test(codec_test)
++#add_cpp_test(codec_test)
+ #add_cpp_test(engine_test)
+-add_cpp_test(thread_safe_test)
+-add_cpp_test(interop_test ${CMAKE_SOURCE_DIR}/tests)
+-add_cpp_test(message_test)
+-add_cpp_test(scalar_test)
+-add_cpp_test(value_test)
+-add_cpp_test(container_test)
+-add_cpp_test(url_test)
++#add_cpp_test(thread_safe_test)
++#add_cpp_test(interop_test ${CMAKE_SOURCE_DIR}/tests)
++#add_cpp_test(message_test)
++#add_cpp_test(scalar_test)
++#add_cpp_test(value_test)
++#add_cpp_test(container_test)
++#add_cpp_test(url_test)
+diff --git a/proton-c/bindings/cpp/docs/CMakeLists.txt b/proton-c/bindings/cpp/docs/CMakeLists.txt
+index d512d15..8576867 100644
+--- a/proton-c/bindings/cpp/docs/CMakeLists.txt
++++ b/proton-c/bindings/cpp/docs/CMakeLists.txt
+@@ -17,7 +17,7 @@
+ # under the License.
+ #
+ 
+-find_package(Doxygen)
++#find_package(Doxygen)
+ 
+ if (DOXYGEN_FOUND)
+   configure_file (
+diff --git a/proton-c/docs/api/CMakeLists.txt b/proton-c/docs/api/CMakeLists.txt
+index 7756e48..71ebb93 100644
+--- a/proton-c/docs/api/CMakeLists.txt
++++ b/proton-c/docs/api/CMakeLists.txt
+@@ -17,7 +17,7 @@
+ # under the License.
+ #
+ 
+-find_package(Doxygen)
++#find_package(Doxygen)
+ if (DOXYGEN_FOUND)
+   configure_file (${CMAKE_CURRENT_SOURCE_DIR}/user.doxygen.in
+                   ${CMAKE_CURRENT_BINARY_DIR}/user.doxygen)
+-- 
+2.7.4
+
