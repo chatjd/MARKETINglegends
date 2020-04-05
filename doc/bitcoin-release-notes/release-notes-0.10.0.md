@@ -126,4 +126,134 @@ For example:
 | `-rpcallowip=192.168.1.1`                  | `-rpcallowip=192.168.1.1` (unchanged) |
 | `-rpcallowip=192.168.1.*`                  | `-rpcallowip=192.168.1.0/24`          |
 | `-rpcallowip=192.168.*`                    | `-rpcallowip=192.168.0.0/16`          |
-| `-rpcallowip=*` (dangerous!)         
+| `-rpcallowip=*` (dangerous!)               | `-rpcallowip=::/0` (still dangerous!) |
+
+Using wildcards will result in the rule being rejected with the following error in debug.log:
+
+    Error: Invalid -rpcallowip subnet specification: *. Valid are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0) or a network/CIDR (e.g. 1.2.3.4/24).
+
+
+REST interface
+--------------
+
+A new HTTP API is exposed when running with the `-rest` flag, which allows
+unauthenticated access to public node data.
+
+It is served on the same port as RPC, but does not need a password, and uses
+plain HTTP instead of JSON-RPC.
+
+Assuming a local RPC server running on port 8332, it is possible to request:
+- Blocks: http://localhost:8332/rest/block/*HASH*.*EXT*
+- Blocks without transactions: http://localhost:8332/rest/block/notxdetails/*HASH*.*EXT*
+- Transactions (requires `-txindex`): http://localhost:8332/rest/tx/*HASH*.*EXT*
+
+In every case, *EXT* can be `bin` (for raw binary data), `hex` (for hex-encoded
+binary) or `json`.
+
+For more details, see the `doc/REST-interface.md` document in the repository.
+
+RPC Server "Warm-Up" Mode
+-------------------------
+
+The RPC server is started earlier now, before most of the expensive
+intialisations like loading the block index.  It is available now almost
+immediately after starting the process.  However, until all initialisations
+are done, it always returns an immediate error with code -28 to all calls.
+
+This new behaviour can be useful for clients to know that a server is already
+started and will be available soon (for instance, so that they do not
+have to start it themselves).
+
+Improved signing security
+-------------------------
+
+For 0.10 the security of signing against unusual attacks has been
+improved by making the signatures constant time and deterministic.
+
+This change is a result of switching signing to use libsecp256k1
+instead of OpenSSL. Libsecp256k1 is a cryptographic library
+optimized for the curve Bitcoin uses which was created by Bitcoin
+Core developer Pieter Wuille.
+
+There exist attacks[1] against most ECC implementations where an
+attacker on shared virtual machine hardware could extract a private
+key if they could cause a target to sign using the same key hundreds
+of times. While using shared hosts and reusing keys are inadvisable
+for other reasons, it's a better practice to avoid the exposure.
+
+OpenSSL has code in their source repository for derandomization
+and reduction in timing leaks that we've eagerly wanted to use for a
+long time, but this functionality has still not made its
+way into a released version of OpenSSL. Libsecp256k1 achieves
+significantly stronger protection: As far as we're aware this is
+the only deployed implementation of constant time signing for
+the curve Bitcoin uses and we have reason to believe that
+libsecp256k1 is better tested and more thoroughly reviewed
+than the implementation in OpenSSL.
+
+[1] https://eprint.iacr.org/2014/161.pdf
+
+Watch-only wallet support
+-------------------------
+
+The wallet can now track transactions to and from wallets for which you know
+all addresses (or scripts), even without the private keys.
+
+This can be used to track payments without needing the private keys online on a
+possibly vulnerable system. In addition, it can help for (manual) construction
+of multisig transactions where you are only one of the signers.
+
+One new RPC, `importaddress`, is added which functions similarly to
+`importprivkey`, but instead takes an address or script (in hexadecimal) as
+argument.  After using it, outputs credited to this address or script are
+considered to be received, and transactions consuming these outputs will be
+considered to be sent.
+
+The following RPCs have optional support for watch-only:
+`getbalance`, `listreceivedbyaddress`, `listreceivedbyaccount`,
+`listtransactions`, `listaccounts`, `listsinceblock`, `gettransaction`. See the
+RPC documentation for those methods for more information.
+
+Compared to using `getrawtransaction`, this mechanism does not require
+`-txindex`, scales better, integrates better with the wallet, and is compatible
+with future block chain pruning functionality. It does mean that all relevant
+addresses need to added to the wallet before the payment, though.
+
+Consensus library
+-----------------
+
+Starting from 0.10.0, the Bitcoin Core distribution includes a consensus library.
+
+The purpose of this library is to make the verification functionality that is
+critical to Bitcoin's consensus available to other applications, e.g. to language
+bindings such as [python-bitcoinlib](https://pypi.python.org/pypi/python-bitcoinlib) or
+alternative node implementations.
+
+This library is called `libbitcoinconsensus.so` (or, `.dll` for Windows).
+Its interface is defined in the C header [bitcoinconsensus.h](https://github.com/bitcoin/bitcoin/blob/0.10/src/script/bitcoinconsensus.h).
+
+In its initial version the API includes two functions:
+
+- `bitcoinconsensus_verify_script` verifies a script. It returns whether the indicated input of the provided serialized transaction 
+correctly spends the passed scriptPubKey under additional constraints indicated by flags
+- `bitcoinconsensus_version` returns the API version, currently at an experimental `0`
+
+The functionality is planned to be extended to e.g. UTXO management in upcoming releases, but the interface
+for existing methods should remain stable.
+
+Standard script rules relaxed for P2SH addresses
+------------------------------------------------
+
+The IsStandard() rules have been almost completely removed for P2SH
+redemption scripts, allowing applications to make use of any valid
+script type, such as "n-of-m OR y", hash-locked oracle addresses, etc.
+While the Bitcoin protocol has always supported these types of script,
+actually using them on mainnet has been previously inconvenient as
+standard Bitcoin Core nodes wouldn't relay them to miners, nor would
+most miners include them in blocks they mined.
+
+bitcoin-tx
+----------
+
+It has been observed that many of the RPC functions offered by bitcoind are
+"pure functions", and operate independently of the bitcoind wallet.
