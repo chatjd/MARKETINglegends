@@ -256,4 +256,117 @@ bitcoin-tx
 ----------
 
 It has been observed that many of the RPC functions offered by bitcoind are
-"pure functions", and operate independently of the bitcoind wallet.
+"pure functions", and operate independently of the bitcoind wallet. This
+included many of the RPC "raw transaction" API functions, such as
+createrawtransaction.
+
+bitcoin-tx is a newly introduced command line utility designed to enable easy
+manipulation of bitcoin transactions. A summary of its operation may be
+obtained via "bitcoin-tx --help" Transactions may be created or signed in a
+manner similar to the RPC raw tx API. Transactions may be updated, deleting
+inputs or outputs, or appending new inputs and outputs. Custom scripts may be
+easily composed using a simple text notation, borrowed from the bitcoin test
+suite.
+
+This tool may be used for experimenting with new transaction types, signing
+multi-party transactions, and many other uses. Long term, the goal is to
+deprecate and remove "pure function" RPC API calls, as those do not require a
+server round-trip to execute.
+
+Other utilities "bitcoin-key" and "bitcoin-script" have been proposed, making
+key and script operations easily accessible via command line.
+
+Mining and relay policy enhancements
+------------------------------------
+
+Bitcoin Core's block templates are now for version 3 blocks only, and any mining
+software relying on its `getblocktemplate` must be updated in parallel to use
+libblkmaker either version 0.4.2 or any version from 0.5.1 onward.
+If you are solo mining, this will affect you the moment you upgrade Bitcoin
+Core, which must be done prior to BIP66 achieving its 951/1001 status.
+If you are mining with the stratum mining protocol: this does not affect you.
+If you are mining with the getblocktemplate protocol to a pool: this will affect
+you at the pool operator's discretion, which must be no later than BIP66
+achieving its 951/1001 status.
+
+The `prioritisetransaction` RPC method has been added to enable miners to
+manipulate the priority of transactions on an individual basis.
+
+Bitcoin Core now supports BIP 22 long polling, so mining software can be
+notified immediately of new templates rather than having to poll periodically.
+
+Support for BIP 23 block proposals is now available in Bitcoin Core's
+`getblocktemplate` method. This enables miners to check the basic validity of
+their next block before expending work on it, reducing risks of accidental
+hardforks or mining invalid blocks.
+
+Two new options to control mining policy:
+- `-datacarrier=0/1` : Relay and mine "data carrier" (OP_RETURN) transactions
+if this is 1.
+- `-datacarriersize=n` : Maximum size, in bytes, we consider acceptable for
+"data carrier" outputs.
+
+The relay policy has changed to more properly implement the desired behavior of not 
+relaying free (or very low fee) transactions unless they have a priority above the 
+AllowFreeThreshold(), in which case they are relayed subject to the rate limiter.
+
+BIP 66: strict DER encoding for signatures
+------------------------------------------
+
+Bitcoin Core 0.10 implements BIP 66, which introduces block version 3, and a new
+consensus rule, which prohibits non-DER signatures. Such transactions have been
+non-standard since Bitcoin v0.8.0 (released in February 2013), but were
+technically still permitted inside blocks.
+
+This change breaks the dependency on OpenSSL's signature parsing, and is
+required if implementations would want to remove all of OpenSSL from the
+consensus code.
+
+The same miner-voting mechanism as in BIP 34 is used: when 751 out of a
+sequence of 1001 blocks have version number 3 or higher, the new consensus
+rule becomes active for those blocks. When 951 out of a sequence of 1001
+blocks have version number 3 or higher, it becomes mandatory for all blocks.
+
+Backward compatibility with current mining software is NOT provided, thus miners
+should read the first paragraph of "Mining and relay policy enhancements" above.
+
+0.10.0 Change log
+=================
+
+Detailed release notes follow. This overview includes changes that affect external
+behavior, not code moves, refactors or string updates.
+
+RPC:
+- `f923c07` Support IPv6 lookup in bitcoin-cli even when IPv6 only bound on localhost
+- `b641c9c` Fix addnode "onetry": Connect with OpenNetworkConnection
+- `171ca77` estimatefee / estimatepriority RPC methods
+- `b750cf1` Remove cli functionality from bitcoind
+- `f6984e8` Add "chain" to getmininginfo, improve help in getblockchaininfo
+- `99ddc6c` Add nLocalServices info to RPC getinfo
+- `cf0c47b` Remove getwork() RPC call
+- `2a72d45` prioritisetransaction <txid> <priority delta> <priority tx fee>
+- `e44fea5` Add an option `-datacarrier` to allow users to disable relaying/mining data carrier transactions
+- `2ec5a3d` Prevent easy RPC memory exhaustion attack
+- `d4640d7` Added argument to getbalance to include watchonly addresses and fixed errors in balance calculation
+- `83f3543` Added argument to listaccounts to include watchonly addresses
+- `952877e` Showing 'involvesWatchonly' property for transactions returned by 'listtransactions' and 'listsinceblock'. It is only appended when the transaction involves a watchonly address
+- `d7d5d23` Added argument to listtransactions and listsinceblock to include watchonly addresses
+- `f87ba3d` added includeWatchonly argument to 'gettransaction' because it affects balance calculation
+- `0fa2f88` added includedWatchonly argument to listreceivedbyaddress/...account
+- `6c37f7f` `getrawchangeaddress`: fail when keypool exhausted and wallet locked
+- `ff6a7af` getblocktemplate: longpolling support
+- `c4a321f` Add peerid to getpeerinfo to allow correlation with the logs
+- `1b4568c` Add vout to ListTransactions output
+- `b33bd7a` Implement "getchaintips" RPC command to monitor blockchain forks
+- `733177e` Remove size limit in RPC client, keep it in server
+- `6b5b7cb` Categorize rpc help overview
+- `6f2c26a` Closely track mempool byte total. Add "getmempoolinfo" RPC
+- `aa82795` Add detailed network info to getnetworkinfo RPC
+- `01094bd` Don't reveal whether password is <20 or >20 characters in RPC
+- `57153d4` rpc: Compute number of confirmations of a block from block height
+- `ff36cbe` getnetworkinfo: export local node's client sub-version string
+- `d14d7de` SanitizeString: allow '(' and ')'
+- `31d6390` Fixed setaccount accepting foreign address
+- `b5ec5fe` update getnetworkinfo help with subversion
+- `ad6e601` RPC additions after headers-first
+- `33dfbf5` rpc: Fix leveldb iterat
