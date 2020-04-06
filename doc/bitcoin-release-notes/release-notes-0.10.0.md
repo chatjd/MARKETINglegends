@@ -466,3 +466,112 @@ P2P protocol and network code:
 - `a3a7317` Introduce 10 minute block download timeout
 - `3022e7d` Require sufficent priority for relay of free transactions
 - `58fda4d` Update seed IPs, based on bitcoin.sipa.be crawler data
+- `18021d0` Remove bitnodes.io from dnsseeds.
+
+Validation:
+- `6fd7ef2` Also switch the (unused) verification code to low-s instead of even-s
+- `584a358` Do merkle root and txid duplicates check simultaneously
+- `217a5c9` When transaction outputs exceed inputs, show the offending amounts so as to aid debugging
+- `f74fc9b` Print input index when signature validation fails, to aid debugging
+- `6fd59ee` script.h: set_vch() should shift a >32 bit value
+- `d752ba8` Add SCRIPT_VERIFY_SIGPUSHONLY (BIP62 rule 2) (test only)
+- `698c6ab` Add SCRIPT_VERIFY_MINIMALDATA (BIP62 rules 3 and 4) (test only)
+- `ab9edbd` script: create sane error return codes for script validation and remove logging
+- `219a147` script: check ScriptError values in script tests
+- `0391423` Discourage NOPs reserved for soft-fork upgrades
+- `98b135f` Make STRICTENC invalid pubkeys fail the script rather than the opcode
+- `307f7d4` Report script evaluation failures in log and reject messages
+- `ace39db` consensus: guard against openssl's new strict DER checks
+- `12b7c44` Improve robustness of DER recoding code
+- `76ce5c8` fail immediately on an empty signature
+
+Build system:
+- `f25e3ad` Fix build in OS X 10.9
+- `65e8ba4` build: Switch to non-recursive make
+- `460b32d` build: fix broken boost chrono check on some platforms
+- `9ce0774` build: Fix windows configure when using --with-qt-libdir
+- `ea96475` build: Add mention of --disable-wallet to bdb48 error messages
+- `1dec09b` depends: add shared dependency builder
+- `c101c76` build: Add --with-utils (bitcoin-cli and bitcoin-tx, default=yes). Help string consistency tweaks. Target sanity check fix
+- `e432a5f` build: add option for reducing exports (v2)
+- `6134b43` Fixing condition 'sabotaging' MSVC build
+- `af0bd5e` osx: fix signing to make Gatekeeper happy (again)
+- `a7d1f03` build: fix dynamic boost check when --with-boost= is used
+- `d5fd094` build: fix qt test build when libprotobuf is in a non-standard path
+- `2cf5f16` Add libbitcoinconsensus library
+- `914868a` build: add a deterministic dmg signer 
+- `2d375fe` depends: bump openssl to 1.0.1k
+- `b7a4ecc` Build: Only check for boost when building code that requires it
+
+Wallet:
+- `b33d1f5` Use fee/priority estimates in wallet CreateTransaction
+- `4b7b1bb` Sanity checks for estimates
+- `c898846` Add support for watch-only addresses
+- `d5087d1` Use script matching rather than destination matching for watch-only
+- `d88af56` Fee fixes
+- `a35b55b` Dont run full check every time we decrypt wallet
+- `3a7c348` Fix make_change to not create half-satoshis
+- `f606bb9` fix a possible memory leak in CWalletDB::Recover
+- `870da77` fix possible memory leaks in CWallet::EncryptWallet
+- `ccca27a` Watch-only fixes
+- `9b1627d` [Wallet] Reduce minTxFee for transaction creation to 1000 satoshis
+- `a53fd41` Deterministic signing
+- `15ad0b5` Apply AreSane() checks to the fees from the network
+- `11855c1` Enforce minRelayTxFee on wallet created tx and add a maxtxfee option
+
+GUI:
+- `c21c74b` osx: Fix missing dock menu with qt5
+- `b90711c` Fix Transaction details shows wrong To:
+- `516053c` Make links in 'About Bitcoin Core' clickable
+- `bdc83e8` Ensure payment request network matches client network
+- `65f78a1` Add GUI view of peer information
+- `06a91d9` VerifyDB progress reporting
+- `fe6bff2` Add BerkeleyDB version info to RPCConsole
+- `b917555` PeerTableModel: Fix potential deadlock. #4296
+- `dff0e3b` Improve rpc console history behavior
+- `95a9383` Remove CENT-fee-rule from coin control completely
+- `56b07d2` Allow setting listen via GUI
+- `d95ba75` Log messages with type>QtDebugMsg as non-debug
+- `8969828` New status bar Unit Display Control and related changes
+- `674c070` seed OpenSSL PNRG with Windows event data
+- `509f926` Payment request parsing on startup now only changes network if a valid network name is specified
+- `acd432b` Prevent balloon-spam after rescan
+- `7007402` Implement SI-style (thin space) thoudands separator
+- `91cce17` Use fixed-point arithmetic in amount spinbox
+- `bdba2dd` Remove an obscure option no-one cares about
+- `bd0aa10` Replace the temporary file hack currently used to change Bitcoin-Qt's dock icon (OS X) with a buffer-based solution
+- `94e1b9e` Re-work overviewpage UI
+- `8bfdc9a` Better looking trayicon
+- `b197bf3` disable tray interactions when client model set to 0
+- `1c5f0af` Add column Watch-only to transactions list
+- `21f139b` Fix tablet crash. closes #4854
+- `e84843c` Broken addresses on command line no longer trigger testnet
+- `a49f11d` Change splash screen to normal window
+- `1f9be98` Disable App Nap on OSX 10.9+
+- `27c3e91` Add proxy to options overridden if necessary
+- `4bd1185` Allow "emergency" shutdown during startup
+- `d52f072` Don't show wallet options in the preferences menu when running with -disablewallet
+- `6093aa1` Qt: QProgressBar CPU-Issue workaround
+- `0ed9675` [Wallet] Add global boolean whether to send free transactions (default=true)
+- `ed3e5e4` [Wallet] Add global boolean whether to pay at least the custom fee (default=true)
+- `e7876b2` [Wallet] Prevent user from paying a non-sense fee
+- `c1c9d5b` Add Smartfee to GUI
+- `e0a25c5` Make askpassphrase dialog behave more sanely
+- `94b362d` On close of splashscreen interrupt verifyDB
+- `b790d13` English translation update
+- `8543b0d` Correct tooltip on address book page
+
+Tests:
+- `b41e594` Fix script test handling of empty scripts
+- `d3a33fc` Test CHECKMULTISIG with m == 0 and n == 0
+- `29c1749` Let tx (in)valid tests use any SCRIPT_VERIFY flag
+- `6380180` Add rejection of non-null CHECKMULTISIG dummy values
+- `21bf3d2` Add tests for BoostAsioToCNetAddr
+- `b5ad5e7` Add Python test for -rpcbind and -rpcallowip
+- `9ec0306` Add CODESEPARATOR/FindAndDelete() tests
+- `75ebced` Added many rpc wallet tests
+- `0193fb8` Allow multiple regression tests to run at once
+- `92a6220` Hook up sanity checks
+- `3820e01` Extend and move all crypto tests to crypto_tests.cpp
+- `3f9a019` added list/get received by address/ account tests
+-
