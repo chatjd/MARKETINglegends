@@ -369,4 +369,100 @@ RPC:
 - `31d6390` Fixed setaccount accepting foreign address
 - `b5ec5fe` update getnetworkinfo help with subversion
 - `ad6e601` RPC additions after headers-first
-- `33dfbf5` rpc: Fix leveldb iterat
+- `33dfbf5` rpc: Fix leveldb iterator leak, and flush before `gettxoutsetinfo`
+- `2aa6329` Enable customising node policy for datacarrier data size with a -datacarriersize option
+- `f877aaa` submitblock: Use a temporary CValidationState to determine accurately the outcome of ProcessBlock
+- `e69a587` submitblock: Support for returning specific rejection reasons
+- `af82884` Add "warmup mode" for RPC server
+- `e2655e0` Add unauthenticated HTTP REST interface to public blockchain data
+- `683dc40` Disable SSLv3 (in favor of TLS) for the RPC client and server
+- `44b4c0d` signrawtransaction: validate private key
+- `9765a50` Implement BIP 23 Block Proposal
+- `f9de17e` Add warning comment to getinfo
+
+Command-line options:
+- `ee21912` Use netmasks instead of wildcards for IP address matching
+- `deb3572` Add `-rpcbind` option to allow binding RPC port on a specific interface
+- `96b733e` Add `-version` option to get just the version
+- `1569353` Add `-stopafterblockimport` option
+- `77cbd46` Let -zapwallettxes recover transaction meta data
+- `1c750db` remove -tor compatibility code (only allow -onion)
+- `4aaa017` rework help messages for fee-related options
+- `4278b1d` Clarify error message when invalid -rpcallowip
+- `6b407e4` -datadir is now allowed in config files
+- `bdd5b58` Add option `-sysperms` to disable 077 umask (create new files with system default umask)
+- `cbe39a3` Add "bitcoin-tx" command line utility and supporting modules
+- `dbca89b` Trigger -alertnotify if network is upgrading without you
+- `ad96e7c` Make -reindex cope with out-of-order blocks
+- `16d5194` Skip reindexed blocks individually
+- `ec01243` --tracerpc option for regression tests
+- `f654f00` Change -genproclimit default to 1
+- `3c77714` Make -proxy set all network types, avoiding a connect leak
+- `57be955` Remove -printblock, -printblocktree, and -printblockindex
+- `ad3d208` remove -maxorphanblocks config parameter since it is no longer functional
+
+Block and transaction handling:
+- `7a0e84d` ProcessGetData(): abort if a block file is missing from disk
+- `8c93bf4` LoadBlockIndexDB(): Require block db reindex if any `blk*.dat` files are missing
+- `77339e5` Get rid of the static chainMostWork (optimization)
+- `4e0eed8` Allow ActivateBestChain to release its lock on cs_main
+- `18e7216` Push cs_mains down in ProcessBlock
+- `fa126ef` Avoid undefined behavior using CFlatData in CScript serialization
+- `7f3b4e9` Relax IsStandard rules for pay-to-script-hash transactions
+- `c9a0918` Add a skiplist to the CBlockIndex structure
+- `bc42503` Use unordered_map for CCoinsViewCache with salted hash (optimization)
+- `d4d3fbd` Do not flush the cache after every block outside of IBD (optimization)
+- `ad08d0b` Bugfix: make CCoinsViewMemPool support pruned entries in underlying cache
+- `5734d4d` Only remove actualy failed blocks from setBlockIndexValid
+- `d70bc52` Rework block processing benchmark code
+- `714a3e6` Only keep setBlockIndexValid entries that are possible improvements
+- `ea100c7` Reduce maximum coinscache size during verification (reduce memory usage)
+- `4fad8e6` Reject transactions with excessive numbers of sigops
+- `b0875eb` Allow BatchWrite to destroy its input, reducing copying (optimization)
+- `92bb6f2` Bypass reloading blocks from disk (optimization)
+- `2e28031` Perform CVerifyDB on pcoinsdbview instead of pcoinsTip (reduce memory usage)
+- `ab15b2e` Avoid copying undo data (optimization)
+- `341735e` Headers-first synchronization
+- `afc32c5` Fix rebuild-chainstate feature and improve its performance
+- `e11b2ce` Fix large reorgs
+- `ed6d1a2` Keep information about all block files in memory
+- `a48f2d6` Abstract context-dependent block checking from acceptance
+- `7e615f5` Fixed mempool sync after sending a transaction
+- `51ce901` Improve chainstate/blockindex disk writing policy
+- `a206950` Introduce separate flushing modes
+- `9ec75c5` Add a locking mechanism to IsInitialBlockDownload to ensure it never goes from false to true
+- `868d041` Remove coinbase-dependant transactions during reorg
+- `723d12c` Remove txn which are invalidated by coinbase maturity during reorg
+- `0cb8763` Check against MANDATORY flags prior to accepting to mempool
+- `8446262` Reject headers that build on an invalid parent
+- `008138c` Bugfix: only track UTXO modification after lookup
+
+P2P protocol and network code:
+- `f80cffa` Do not trigger a DoS ban if SCRIPT_VERIFY_NULLDUMMY fails
+- `c30329a` Add testnet DNS seed of Alex Kotenko
+- `45a4baf` Add testnet DNS seed of Andreas Schildbach
+- `f1920e8` Ping automatically every 2 minutes (unconditionally)
+- `806fd19` Allocate receive buffers in on the fly
+- `6ecf3ed` Display unknown commands received
+- `aa81564` Track peers' available blocks
+- `caf6150` Use async name resolving to improve net thread responsiveness
+- `9f4da19` Use pong receive time rather than processing time
+- `0127a9b` remove SOCKS4 support from core and GUI, use SOCKS5
+- `40f5cb8` Send rejects and apply DoS scoring for errors in direct block validation
+- `dc942e6` Introduce whitelisted peers
+- `c994d2e` prevent SOCKET leak in BindListenPort()
+- `a60120e` Add built-in seeds for .onion
+- `60dc8e4` Allow -onlynet=onion to be used
+- `3a56de7` addrman: Do not propagate obviously poor addresses onto the network
+- `6050ab6` netbase: Make SOCKS5 negotiation interruptible
+- `604ee2a` Remove tx from AlreadyAskedFor list once we receive it, not when we process it
+- `efad808` Avoid reject message feedback loops
+- `71697f9` Separate protocol versioning from clientversion
+- `20a5f61` Don't relay alerts to peers before version negotiation
+- `b4ee0bd` Introduce preferred download peers
+- `845c86d` Do not use third party services for IP detection
+- `12a49ca` Limit the number of new addressses to accumulate
+- `35e408f` Regard connection failures as attempt for addrman
+- `a3a7317` Introduce 10 minute block download timeout
+- `3022e7d` Require sufficent priority for relay of free transactions
+- `58fda4d` Update seed IPs, based on bitcoin.sipa.be crawler data
