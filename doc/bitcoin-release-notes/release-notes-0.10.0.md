@@ -574,4 +574,180 @@ Tests:
 - `92a6220` Hook up sanity checks
 - `3820e01` Extend and move all crypto tests to crypto_tests.cpp
 - `3f9a019` added list/get received by address/ account tests
--
+- `a90689f` Remove timing-based signature cache unit test
+- `236982c` Add skiplist unit tests
+- `f4b00be` Add CChain::GetLocator() unit test
+- `b45a6e8` Add test for getblocktemplate longpolling
+- `cdf305e` Set -discover=0 in regtest framework
+- `ed02282` additional test for OP_SIZE in script_valid.json
+- `0072d98` script tests: BOOLAND, BOOLOR decode to integer
+- `833ff16` script tests: values that overflow to 0 are true
+- `4cac5db` script tests: value with trailing 0x00 is true
+- `89101c6` script test: test case for 5-byte bools
+- `d2d9dc0` script tests: add tests for CHECKMULTISIG limits
+- `d789386` Add "it works" test for bitcoin-tx
+- `df4d61e` Add bitcoin-tx tests
+- `aa41ac2` Test IsPushOnly() with invalid push
+- `6022b5d` Make `script_{valid,invalid}.json` validation flags configurable
+- `8138cbe` Add automatic script test generation, and actual checksig tests
+- `ed27e53` Add coins_tests with a large randomized CCoinViewCache test
+- `9df9cf5` Make SCRIPT_VERIFY_STRICTENC compatible with BIP62
+- `dcb9846` Extend getchaintips RPC test
+- `554147a` Ensure MINIMALDATA invalid tests can only fail one way
+- `dfeec18` Test every numeric-accepting opcode for correct handling of the numeric minimal encoding rule
+- `2b62e17` Clearly separate PUSHDATA and numeric argument MINIMALDATA tests
+- `16d78bd` Add valid invert of invalid every numeric opcode tests
+- `f635269` tests: enable alertnotify test for Windows
+- `7a41614` tests: allow rpc-tests to get filenames for bitcoind and bitcoin-cli from the environment
+- `5122ea7` tests: fix forknotify.py on windows
+- `fa7f8cd` tests: remove old pull-tester scripts
+- `7667850` tests: replace the old (unused since Travis) tests with new rpc test scripts
+- `f4e0aef` Do signature-s negation inside the tests
+- `1837987` Optimize -regtest setgenerate block generation
+- `2db4c8a` Fix node ranges in the test framework
+- `a8b2ce5` regression test only setmocktime RPC call
+- `daf03e7` RPC tests: create initial chain with specific timestamps
+- `8656dbb` Port/fix txnmall.sh regression test
+- `ca81587` Test the exact order of CHECKMULTISIG sig/pubkey evaluation
+- `7357893` Prioritize and display -testsafemode status in UI
+- `f321d6b` Add key generation/verification to ECC sanity check
+- `132ea9b` miner_tests: Disable checkpoints so they don't fail the subsidy-change test
+- `bc6cb41` QA RPC tests: Add tests block block proposals
+- `f67a9ce` Use deterministically generated script tests
+- `11d7a7d` [RPC] add rpc-test for http keep-alive (persistent connections)
+- `34318d7` RPC-test based on invalidateblock for mempool coinbase spends
+- `76ec867` Use actually valid transactions for script tests
+- `c8589bf` Add actual signature tests
+- `e2677d7` Fix smartfees test for change to relay policy
+- `263b65e` tests: run sanity checks in tests too
+
+Miscellaneous:
+- `122549f` Fix incorrect checkpoint data for testnet3
+- `5bd02cf` Log used config file to debug.log on startup
+- `68ba85f` Updated Debian example bitcoin.conf with config from wiki + removed some cruft and updated comments
+- `e5ee8f0` Remove -beta suffix
+- `38405ac` Add comment regarding experimental-use service bits
+- `be873f6` Issue warning if collecting RandSeed data failed
+- `8ae973c` Allocate more space if necessary in RandSeedAddPerfMon
+- `675bcd5` Correct comment for 15-of-15 p2sh script size
+- `fda3fed` libsecp256k1 integration
+- `2e36866` Show nodeid instead of addresses in log (for anonymity) unless otherwise requested
+- `cd01a5e` Enable paranoid corruption checks in LevelDB >= 1.16
+- `9365937` Add comment about never updating nTimeOffset past 199 samples
+- `403c1bf` contrib: remove getwork-based pyminer (as getwork API call has been removed)
+- `0c3e101` contrib: Added systemd .service file in order to help distributions integrate bitcoind
+- `0a0878d` doc: Add new DNSseed policy
+- `2887bff` Update coding style and add .clang-format
+- `5cbda4f` Changed LevelDB cursors to use scoped pointers to ensure destruction when going out of scope
+- `b4a72a7` contrib/linearize: split output files based on new-timestamp-year or max-file-size
+- `e982b57` Use explicit fflush() instead of setvbuf()
+- `234bfbf` contrib: Add init scripts and docs for Upstart and OpenRC
+- `01c2807` Add warning about the merkle-tree algorithm duplicate txid flaw
+- `d6712db` Also create pid file in non-daemon mode
+- `772ab0e` contrib: use batched JSON-RPC in linarize-hashes (optimization)
+- `7ab4358` Update bash-completion for v0.10
+- `6e6a36c` contrib: show pull # in prompt for github-merge script
+- `5b9f842` Upgrade leveldb to 1.18, make chainstate databases compatible between ARM and x86 (issue #2293)
+- `4e7c219` Catch UTXO set read errors and shutdown
+- `867c600` Catch LevelDB errors during flush
+- `06ca065` Fix CScriptID(const CScript& in) in empty script case
+
+Credits
+=======
+
+Thanks to everyone who contributed to this release:
+
+- 21E14
+- Adam Weiss
+- Aitor Pazos
+- Alexander Jeng
+- Alex Morcos
+- Alon Muroch
+- Andreas Schildbach
+- Andrew Poelstra
+- Andy Alness
+- Ashley Holman
+- Benedict Chan
+- Ben Holden-Crowther
+- Bryan Bishop
+- BtcDrak
+- Christian von Roques
+- Clinton Christian
+- Cory Fields
+- Cozz Lovan
+- daniel
+- Daniel Kraft
+- David Hill
+- Derek701
+- dexX7
+- dllud
+- Dominyk Tiller
+- Doug
+- elichai
+- elkingtowa
+- ENikS
+- Eric Shaw
+- Federico Bond
+- Francis GASCHET
+- Gavin Andresen
+- Giuseppe Mazzotta
+- Glenn Willen
+- Gregory Maxwell
+- gubatron
+- HarryWu
+- himynameismartin
+- Huang Le
+- Ian Carroll
+- imharrywu
+- Jameson Lopp
+- Janusz Lenar
+- JaSK
+- Jeff Garzik
+- JL2035
+- Johnathan Corgan
+- Jonas Schnelli
+- jtimon
+- Julian Haight
+- Kamil Domanski
+- kazcw
+- kevin
+- kiwigb
+- Kosta Zertsekel
+- LongShao007
+- Luke Dashjr
+- Mark Friedenbach
+- Mathy Vanvoorden
+- Matt Corallo
+- Matthew Bogosian
+- Micha
+- Michael Ford
+- Mike Hearn
+- mrbandrews
+- mruddy
+- ntrgn
+- Otto Allmendinger
+- paveljanik
+- Pavel Vasin
+- Peter Todd
+- phantomcircuit
+- Philip Kaufmann
+- Pieter Wuille
+- pryds
+- randy-waterhouse
+- R E Broadley
+- Rose Toomey
+- Ross Nicoll
+- Roy Badami
+- Ruben Dario Ponticelli
+- Rune K. Svendsen
+- Ryan X. Charles
+- Saivann
+- sandakersmann
+- SergioDemianLerner
+- shshshsh
+- sinetek
+- Stuart Cardall
+- Suhas Daftuar
+- Tawanda Kembo
+- Teran McKinney
+- t
