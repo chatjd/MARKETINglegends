@@ -40,4 +40,31 @@ passphrase in a secure location and do not forget it.
 
 Remember that the encryption built into bitcoin only encrypts the
 actual keys which are required to send your bitcoins, not the full
-wallet.  This means that someone w
+wallet.  This means that someone who steals your wallet file will
+be able to see all the addresses which belong to you, as well as the
+relevant transactions, you are only protected from someone spending
+your coins.
+
+It is recommended that you backup your wallet file before you
+encrypt your wallet.  To do this, close the Bitcoin client and
+copy the wallet.dat file from ~/.bitcoin/ on Linux, /Users/(user
+name)/Application Support/Bitcoin/ on Mac OSX, and %APPDATA%/Bitcoin/
+on Windows (that is /Users/(user name)/AppData/Roaming/Bitcoin on
+Windows Vista and 7 and /Documents and Settings/(user name)/Application
+Data/Bitcoin on Windows XP).  Once you have copied that file to a
+safe location, reopen the Bitcoin client and Encrypt your wallet.
+If everything goes fine, delete the backup and enjoy your encrypted
+wallet.  Note that once you encrypt your wallet, you will never be
+able to go back to a version of the Bitcoin client older than 0.4.
+
+Keep in mind that you are always responsible for your own security.
+All it takes is a slightly more advanced wallet-stealing trojan which
+installs a keylogger to steal your wallet passphrase as you enter it
+in addition to your wallet file and you have lost all your Bitcoins.
+Wallet encryption cannot keep you safe if you do not practice
+good security, such as running up-to-date antivirus software, only
+entering your wallet passphrase in the Bitcoin client and using the
+same passphrase only as your wallet passphrase.
+
+See the doc/README file in the bitcoin source for technical details
+of wallet encryption.
