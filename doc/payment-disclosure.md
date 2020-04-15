@@ -88,4 +88,20 @@ For nodes that only validate payment disclosures, no data is stored locally.
 
 For nodes that generate payment disclosures, a LevelDB database is created in the node's datadir.  For most users, this would be in the folder:
 
-    $HOME/.vidulum/paymentd
+    $HOME/.vidulum/paymentdisclosure
+    
+If you decide you don't want to use payment disclosure, it is safe to shut down your node and delete the database folder.
+
+### Security Properties
+
+Please consult the work-in-progress ZIP for details about the protocol, security properties and caveats.
+
+### Reminder
+
+Feedback is most welcome!
+
+This is an experimental feature so there are no guarantees that the protocol, database format, RPC interface etc. will remain the same in the future.
+
+### Notes
+
+Currently there is no user friendly way to help senders identify which joinsplit output index maps to a given payment they made.  It is possible to construct this from `debug.log`.  Ideas and feedback are most welcome on how to improve the user experience.
