@@ -286,4 +286,126 @@ GUI:
 - Improve options dialog
 - Show transaction fee in new send confirmation dialog
 - Add total balance in overview page
-- Allow user to choose data directory on first st
+- Allow user to choose data directory on first start, when data directory is
+  missing, or when the -choosedatadir option is passed
+- Save and restore window positions
+- Add vout index to transaction id in transactions details dialog
+- Add network traffic graph in debug window
+- Add open URI dialog
+- Add Coin Control Features
+- Improve receive coins workflow: make the 'Receive' tab into a form to request
+  payments, and move historical address list functionality to File menu.
+- Rebrand to `Bitcoin Core`
+- Move initialization/shutdown to a thread. This prevents "Not responding"
+  messages during startup. Also show a window during shutdown.
+- Don't regenerate autostart link on every client startup
+- Show and store message of normal bitcoin:URI
+- Fix richtext detection hang issue on very old Qt versions
+- OS X: Make use of the 10.8+ user notification center to display Growl-like 
+  notifications
+- OS X: Added NSHighResolutionCapable flag to Info.plist for better font
+  rendering on Retina displays.
+- OS X: Fix bitcoin-qt startup crash when clicking dock icon
+- Linux: Fix Gnome bitcoin: URI handler
+
+Miscellaneous:
+
+- Add Linux script (contrib/qos/tc.sh) to limit outgoing bandwidth
+- Add '-regtest' mode, similar to testnet but private with instant block
+  generation with 'setgenerate' RPC.
+- Add 'linearize.py' script to contrib, for creating bootstrap.dat
+- Add separate bitcoin-cli client
+
+Credits
+--------
+
+Thanks to everyone who contributed to this release:
+
+- Andrey
+- Ashley Holman
+- b6393ce9-d324-4fe1-996b-acf82dbc3d53
+- bitsofproof
+- Brandon Dahler
+- Calvin Tam
+- Christian Decker
+- Christian von Roques
+- Christopher Latham
+- Chuck
+- coblee
+- constantined
+- Cory Fields
+- Cozz Lovan
+- daniel
+- Daniel Larimer
+- David Hill
+- Dmitry Smirnov
+- Drak
+- Eric Lombrozo
+- fanquake
+- fcicq
+- Florin
+- frewil
+- Gavin Andresen
+- Gregory Maxwell
+- gubatron
+- Guillermo Céspedes Tabárez
+- Haakon Nilsen
+- HaltingState
+- Han Lin Yap
+- harry
+- Ian Kelling
+- Jeff Garzik
+- Johnathan Corgan
+- Jonas Schnelli
+- Josh Lehan
+- Josh Triplett
+- Julian Langschaedel
+- Kangmo
+- Lake Denman
+- Luke Dashjr
+- Mark Friedenbach
+- Matt Corallo
+- Michael Bauer
+- Michael Ford
+- Michagogo
+- Midnight Magic
+- Mike Hearn
+- Nils Schneider
+- Noel Tiernan
+- Olivier Langlois
+- patrick s
+- Patrick Strateman
+- paveljanik
+- Peter Todd
+- phantomcircuit
+- phelixbtc
+- Philip Kaufmann
+- Pieter Wuille
+- Rav3nPL
+- R E Broadley
+- regergregregerrge
+- Robert Backhaus
+- Roman Mindalev
+- Rune K. Svendsen
+- Ryan Niebur
+- Scott Ellis
+- Scott Willeke
+- Sergey Kazenyuk
+- Shawn Wilkinson
+- Sined
+- sje
+- Subo1978
+- super3
+- Tamas Blummer
+- theuni
+- Thomas Holenstein
+- Timon Rapp
+- Timothy Stranex
+- Tom Geller
+- Torstein Husebø
+- Vaclav Vobornik
+- vhf / victor felder
+- Vinnie Falco
+- Warren Togami
+- Wil Bown
+- Wladimir J. van der Laan
