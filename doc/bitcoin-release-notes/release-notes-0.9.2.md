@@ -1,6 +1,7 @@
-Bitcoin Core version 0.9.2.1 is now available from:
 
-  https://bitcoin.org/bin/0.9.2.1/
+Bitcoin Core version 0.9.2 is now available from:
+
+  https://bitcoin.org/bin/0.9.2/
 
 This is a new minor version release, bringing mostly bug fixes and some minor
 improvements. OpenSSL has been updated because of a security issue (CVE-2014-0224).
@@ -19,7 +20,7 @@ installer (on Windows) or just copy over /Applications/Bitcoin-Qt (on Mac) or
 bitcoind/bitcoin-qt (on Linux).
 
 If you are upgrading from version 0.7.2 or earlier, the first time you run
-0.9.2.1 your blockchain files will be re-indexed, which will take anywhere from 
+0.9.2 your blockchain files will be re-indexed, which will take anywhere from 
 30 minutes to several hours, depending on the speed of your machine.
 
 Downgrading warnings
@@ -59,7 +60,7 @@ This brings back compatibility with
 - Ubuntu 10.04
 - CentOS 6.5
 
-0.9.2 - 0.9.2.1 Release notes
+0.9.2 Release notes
 =======================
 
 The OpenSSL dependency in the gitian builds has been upgraded to 1.0.1h because of CVE-2014-0224.
