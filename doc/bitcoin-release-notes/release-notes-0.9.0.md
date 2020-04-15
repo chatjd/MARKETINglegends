@@ -147,4 +147,143 @@ network and for miners to consider the transaction in their blocks to
 
 Note that getting a transaction relayed across the network does NOT guarantee
 that the transaction will be accepted by a miner; by default, miners fill
-their blocks with 50 k
+their blocks with 50 kilobytes of high-priority transactions, and then with
+700 kilobytes of the highest-fee-per-kilobyte transactions.
+
+The minimum relay/mining fee-per-kilobyte may be changed with the
+minrelaytxfee option. Note that previous releases incorrectly used
+the mintxfee setting to determine which low-priority transactions should
+be considered for inclusion in blocks.
+
+The wallet code still uses a default fee for low-priority transactions of
+0.1mBTC per kilobyte. During periods of heavy transaction volume, even this
+fee may not be enough to get transactions confirmed quickly; the mintxfee
+option may be used to override the default.
+
+0.9.0 Release notes
+=======================
+
+RPC:
+
+- New notion of 'conflicted' transactions, reported as confirmations: -1
+- 'listreceivedbyaddress' now provides tx ids
+- Add raw transaction hex to 'gettransaction' output
+- Updated help and tests for 'getreceivedby(account|address)'
+- In 'getblock', accept 2nd 'verbose' parameter, similar to getrawtransaction,
+  but defaulting to 1 for backward compatibility
+- Add 'verifychain', to verify chain database at runtime
+- Add 'dumpwallet' and 'importwallet' RPCs
+- 'keypoolrefill' gains optional size parameter
+- Add 'getbestblockhash', to return tip of best chain
+- Add 'chainwork' (the total work done by all blocks since the genesis block)
+  to 'getblock' output
+- Make RPC password resistant to timing attacks
+- Clarify help messages and add examples
+- Add 'getrawchangeaddress' call for raw transaction change destinations
+- Reject insanely high fees by default in 'sendrawtransaction'
+- Add RPC call 'decodescript' to decode a hex-encoded transaction script
+- Make 'validateaddress' provide redeemScript
+- Add 'getnetworkhashps' to get the calculated network hashrate
+- New RPC 'ping' command to request ping, new 'pingtime' and 'pingwait' fields
+  in 'getpeerinfo' output
+- Adding new 'addrlocal' field to 'getpeerinfo' output
+- Add verbose boolean to 'getrawmempool'
+- Add rpc command 'getunconfirmedbalance' to obtain total unconfirmed balance
+- Explicitly ensure that wallet is unlocked in `importprivkey`
+- Add check for valid keys in `importprivkey`
+
+Command-line options:
+
+- New option: -nospendzeroconfchange to never spend unconfirmed change outputs
+- New option: -zapwallettxes to rebuild the wallet's transaction information
+- Rename option '-tor' to '-onion' to better reflect what it does
+- Add '-disablewallet' mode to let bitcoind run entirely without wallet (when
+  built with wallet)
+- Update default '-rpcsslciphers' to include TLSv1.2
+- make '-logtimestamps' default on and rework help-message
+- RPC client option: '-rpcwait', to wait for server start
+- Remove '-logtodebugger'
+- Allow `-noserver` with bitcoind
+
+Block-chain handling and storage:
+
+- Update leveldb to 1.15
+- Check for correct genesis (prevent cases where a datadir from the wrong
+  network is accidentally loaded)
+- Allow txindex to be removed and add a reindex dialog
+- Log aborted block database rebuilds
+- Store orphan blocks in serialized form, to save memory
+- Limit the number of orphan blocks in memory to 750
+- Fix non-standard disconnected transactions causing mempool orphans
+- Add a new checkpoint at block 279,000
+
+Wallet:
+
+- Bug fixes and new regression tests to correctly compute
+  the balance of wallets containing double-spent (or mutated) transactions
+- Store key creation time. Calculate whole-wallet birthday.
+- Optimize rescan to skip blocks prior to birthday
+- Let user select wallet file with -wallet=foo.dat
+- Consider generated coins mature at 101 instead of 120 blocks
+- Improve wallet load time
+- Don't count txins for priority to encourage sweeping
+- Don't create empty transactions when reading a corrupted wallet
+- Fix rescan to start from beginning after importprivkey
+- Only create signatures with low S values
+
+Mining:
+
+- Increase default -blockmaxsize/prioritysize to 750K/50K
+- 'getblocktemplate' does not require a key to create a block template
+- Mining code fee policy now matches relay fee policy
+
+Protocol and network:
+
+- Drop the fee required to relay a transaction to 0.01mBTC per kilobyte
+- Send tx relay flag with version
+- New 'reject' P2P message (BIP 0061, see
+  https://gist.github.com/gavinandresen/7079034 for draft)
+- Dump addresses every 15 minutes instead of 10 seconds
+- Relay OP_RETURN data TxOut as standard transaction type
+- Remove CENT-output free transaction rule when relaying
+- Lower maximum size for free transaction creation
+- Send multiple inv messages if mempool.size > MAX_INV_SZ
+- Split MIN_PROTO_VERSION into INIT_PROTO_VERSION and MIN_PEER_PROTO_VERSION
+- Do not treat fFromMe transaction differently when broadcasting
+- Process received messages one at a time without sleeping between messages
+- Improve logging of failed connections
+- Bump protocol version to 70002
+- Add some additional logging to give extra network insight
+- Added new DNS seed from bitcoinstats.com
+
+Validation:
+
+- Log reason for non-standard transaction rejection
+- Prune provably-unspendable outputs, and adapt consistency check for it.
+- Detect any sufficiently long fork and add a warning
+- Call the -alertnotify script when we see a long or invalid fork
+- Fix multi-block reorg transaction resurrection
+- Reject non-canonically-encoded serialization sizes
+- Reject dust amounts during validation
+- Accept nLockTime transactions that finalize in the next block
+
+Build system:
+
+- Switch to autotools-based build system
+- Build without wallet by passing `--disable-wallet` to configure, this 
+  removes the BerkeleyDB dependency
+- Upgrade gitian dependencies (libpng, libz, libupnpc, boost, openssl) to more
+  recent versions
+- Windows 64-bit build support
+- Solaris compatibility fixes
+- Check integrity of gitian input source tarballs
+- Enable full GCC Stack-smashing protection for all OSes
+
+GUI:
+
+- Switch to Qt 5.2.0 for Windows build
+- Add payment request (BIP 0070) support
+- Improve options dialog
+- Show transaction fee in new send confirmation dialog
+- Add total balance in overview page
+- Allow user to choose data directory on first st
