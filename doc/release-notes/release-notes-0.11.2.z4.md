@@ -35,4 +35,36 @@ Sean Bowe (14):
       Enforce first four bits are zero for all spending keys and phi.
       Enable binary serializations of proofs and r1cs keys, and make the `CPourTx` proof field fixed-size.
       Reorder fields of CPourTx to reflect the spec.
-      Update proving key and tests that depend on tran
+      Update proving key and tests that depend on transaction structure changes
+      Enable MULTICORE proving behavior with omp.
+      Pass `-fopenmp` at compile-time to enable MULTICORE.
+      Switch to Ed25519 for cryptographic binding of joinsplits to transactions.
+      Enforce that the `S` value of the ed25519 signature is smaller than the group order to prevent malleability attacks.
+      Use joinsplit_sig_t in more places.
+      Wrap lines in *CTransaction constructors.
+      Change error for invalid joinsplit signature for consistency.
+      Add additional assertions.
+      Update performance measurement transaction.
+
+Simon (2):
+      Remove Bitcoin testnet seeds.
+      Remove Bitcoin mainnet seeds.
+
+Taylor Hornby (16):
+      Fix build warnings in sighash tests.
+      Fix FORTIFY_SOURCE build errors.
+      Use HARDENED_CPPFLAGS in the Makefile consistently.
+      Use left shift instead of floating-point pow() in equihash.
+      Ignore deprecated declaration warnings.
+      Remove unused code in libzerocash util.cpp
+      Turn on -Werror for the Snowgem build.
+      Patch libsnark to build with my compiler. Upstream PR #35.
+      Hide new Boost warnings on GCC 6.
+      Add ability to run things under valgrind.
+      Pass -DPURIFY to OpenSSL so it doesn't clutter valgrind output.
+      Enable -v for valgrind so we can see counts for each error.
+      Sign JoinSplit transactions
+      We don't want to benchmark signature creation / verification.
+      Implement signature verification in CheckTransaction
+      Fix tests for JoinSplit signatures
+
