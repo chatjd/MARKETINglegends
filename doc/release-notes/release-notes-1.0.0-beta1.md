@@ -96,4 +96,64 @@ Simon (91):
       Refactoring and small improvements to async rpc operations.
       Closes #1293 by adding z_getoperationresult and making z_getoperationstatus idempotent.
       Add chaining of JoinSplits within a transaction.
-      Disable option to allow multiple async rpc worker
+      Disable option to allow multiple async rpc workers.
+      Coinbase utxos can only be spent when sending to a single zaddr. Change from the transaction will be sent to the same zaddr.
+      Fix bug where call to sign and send a transaction was in wrong scope.
+      Added option to close a queue and wait for queued up operations to finish, rather than just closing a queue and immediately cancelling all operations.
+      Fix bug where wallet was not persisting witnesses to disk. Author: str4d
+      Refactor to use wallet note tracking from commit a72379
+      Clear the operation queue when closing it.
+      Add test for AsyncRPCQueue and AsyncRPCOperation.
+      Add shared queue to AsynRPCQueue.
+      Update RPCServer to use AsyncRPCQueue's shared queue.
+      Remove redundant check when getting spending key for a payment address.
+      Add tests for async queue and rpc commands: z_getoperationstatus, z_getoperationresult, z_listoperationids, z_sendmany
+      Remove redundant call.
+      Add logging under the category "asyncrpc".
+      Add extra checking of memo data in hexadecimal string format.
+      Add friend class for testing private members of AsyncRPCOperation_sendmany.
+      Add z_getbalance and z_gettotalbalance RPC calls to close #1201.
+      Fix typo in error message
+      Disable proof generation when testmode is enabled in async SendMany operation.
+      Reduce use of global psnowgemParams with private member variable
+      Revert "Reduce use of global psnowgemParams with private member variable"
+      Replace snowgemParams_ with global.
+      Add tests to try and improve coverage of perform_joinsplit.
+      Add GetUnspentNotes to wallet.
+      Add test for GetUnspentNotes() in wallet.
+      Refactor async sendmany and getbalance calls to use GetUnspentNotes().
+      Add more logging.
+      Disable z_sendmany in safe mode
+      Rename GetUnspentNotes to GetFilteredNotes
+      Add z_listreceivedbyaddress RPC call
+      Add 'DEPRECATED' to help message of zcraw* commands
+      Update formatting and documentation.
+      Move lock guard to start of addOperation to protect isClosed() and isFinishing()
+      Fix formatting
+      Add lock guard to getNumberOfWorkers()
+      Replace unique_lock with lock_guard, where appropriate, for consistency
+      Add extra RPC parameter checks for minconf<0 and zaddr not belonging to wallet.
+      Add test for calling RPC z_getbalance, z_gettotalbalance, z_listreceivedbyaddress with invalid parameters.
+      Fix formatting
+      Update log statement to include fee.
+      Fix incorrect default value for argument of GetFilteredNotes.
+      Formatting and updated test per review.
+      Add lock for member variables. Clean up and clarify that id_ and creation_time_ are never to be mutated anywhere. Fix incomplete copy/assignment constructors.
+      Remove unused varible.
+      Add ticket number to issues raised in comment.
+      Add assert for two mutually exclusive member variables.
+      Improve error reporting when attempting to spend coinbase utxos.
+      Use snowgem constants
+      Fix formatting
+      Add assert
+      Update comment with ticket issue number
+      Remove line of commented out code we don't need
+      Improve check that user supplied memo field is too long.
+      Replace GetTxid() with GetHash()
+      Update payment-api.md
+      Update security-warnings.md about REST interface
+      Update payment API documentation for beta 1
+
+Taylor Hornby (2):
+      Add -Wformat -Wformat-security
+      Use -Wformat in the test for -Wformat-security
