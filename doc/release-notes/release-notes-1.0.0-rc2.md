@@ -38,4 +38,69 @@ Jack Grigg (31):
       Refactor test code to better test JSDescription::Randomized()
       Remove stale comment
       Rename libbitcoinconsensus to libzcashconsensus
-      Rename bitcoin-tx
+      Rename bitcoin-tx to snowgem-tx
+      Remove the RC 1 block index error message
+      Disable wallet encryption
+      Add more assertions, throw if find_output params are invalid
+      Clear witness cache when re-witnessing notes
+      Add heights to log output
+      Throw an error when encryptwallet is disabled
+      Document that wallet encryption is disabled
+      Document another wallet encryption concern
+      Improve security documentation
+      Fix RPC tests that require wallet encryption
+      Add test that encryptwallet is disabled
+      Revert "Revert "Avoid boost::posix_time functions that have potential out-of-bounds read bugs. ref #1459""
+      GBT: Support coinbasetxn instead of coinbasevalue
+      GBT: Add informational founders' reward value to coinbasetxn
+      GBT: Correct block header in proposals RPC test
+      GBT: Add RPC tests
+      Disallow v0 transactions as a consensus rule
+      Reject block versions lower than 4
+      Regenerate genesis blocks with nVersion = 4
+      Use tromp's solver to regenerate miner tests
+      Update tests for new genesis blocks
+      Enforce standard transaction rules on testnet
+      Update sighash tests for new consensus rule
+      Fix RPC test
+
+Jay Graber (7):
+      Rm bitcoin dev keys from gitian-downloader, add snowgem dev keys
+      Rm bips.md
+      Update files.md for snowgem
+      Update dnsseed-policy.md
+      Developer notes still relevant
+      Document RPC interface security assumptions in security-warnings.md
+      Update RPC interfaces warnings language
+
+Patrick Strateman (1):
+      CDataStream::ignore Throw exception instead of assert on negative nSize.
+
+Pieter Wuille (4):
+      Introduce constant for maximum CScript length
+      Treat overly long scriptPubKeys as unspendable
+      Fix OOM bug: UTXO entries with invalid script length
+      Add tests for CCoins deserialization
+
+Simon (17):
+      Fixes CID 1147436 uninitialized scalar field.
+      Fixes CID 1352706 uninitialized scalar field.
+      Fixes CID 1352698 uninitialized scalar field.
+      Fixes CID 1352687 uninitialized scalar field.
+      Fixes CID 1352715 uninitialized scalar field.
+      Fixes CID 1352686 uninitialized scalar variable.
+      Fixes CID 1352599 unitialized scalar variable
+      Fixes CID 1352727 uninitialized scalar variable.
+      Fixes CID 1352714 uninitialized scalar variable.
+      Add security warning about logging of z_* calls.
+      Add debug option "zrpcunsafe" to be used when logging more sensitive information such as the memo field of a note.
+      Closes #1583 by setting up the datadir for the wallet gtest.
+      Fix issue where z_sendmany is too strict and does not allow integer based amount e.g. 1 which is the same as 1.0
+      Update test to use integer amount as well as decimal amount when calling z_sendmany
+      Fix build problem with coins_tests
+      Workaround g++ 5.x bug with brace enclosed initializer.
+      Patch backport of upstream 1588 as we don't (yet) use the NetMsgType namespace
+
+Wladimir J. van der Laan (1):
+      net: Ignore `notfound` P2P messages
+
