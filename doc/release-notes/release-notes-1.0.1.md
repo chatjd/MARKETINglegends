@@ -22,4 +22,13 @@ Kevin Gallagher (1):
       Improves usability of fetch-params.sh
 
 Sean Bowe (6):
-      Properly account for joinsplit value when deciding if a transaction should 
+      Properly account for joinsplit value when deciding if a transaction should be placed in a mined block.
+      Add checkpoint at block 2500.
+      Throw more descriptive exceptions when the constraint system is violated.
+      Test that a pure joinsplit will mine if other transactions are in the mempool.
+      1.0.1 release.
+      Update man pages.
+
+Simon (1):
+      Closes #1746. Add rpc call z_validateaddress to validate zaddrs.
+
