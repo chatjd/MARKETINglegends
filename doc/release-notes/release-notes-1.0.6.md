@@ -57,4 +57,92 @@ Jeff Garzik (4):
 Johnathan Corgan (5):
       zmq: require version 4.x or newer of libzmq
       zmq: update and cleanup build-unix, release-notes, and zmq docs
-      autotoo
+      autotools: move checking for zmq library to common area in configure.ac
+      zmq: update docs to reflect feature is compiled in automatically if possible
+      zmq: point API link to 4.0 as that is what we are conforming to [Trivial]
+
+Jonas Schnelli (24):
+      QA: Add ZeroMQ RPC test
+      depends: fix platform specific packages variable
+      [travis] add zmq python module
+      use CBlockIndex* insted of uint256 for UpdatedBlockTip signal
+      [ZMQ] refactor message string
+      [ZMQ] append a message sequence number to every ZMQ notification
+      fix rpc-tests.sh
+      extend conversion to UniValue
+      expicit set UniValue type to avoid empty values
+      special threatment for null,true,false because they are non valid json
+      univalue: add support for real, fix percision and make it json_spirit compatible
+      univalue: correct bool support
+      fix rpc unit test, plain numbers are not JSON compatible object
+      remove JSON Spirit UniValue wrapper
+      Remove JSON Spirit wrapper, remove JSON Spirit leftovers
+      fix rpc batching univalue issue
+      fix missing univalue types during constructing
+      fix univalue json parse tests
+      univalue: add type check unit tests
+      fix util_tests.cpp clang warnings
+      fix rpcmining/getblocktemplate univalue transition logic error
+      remove univalue, prepare for subtree
+      [Univalue] add univalue over subtree
+      remove $(@F) and subdirs from univalue make
+
+João Barbosa (2):
+      Add UpdatedBlockTip signal to CMainSignals and CValidationInterface
+      Fix ZMQ Notification initialization and shutdown
+
+Paragon Initiative Enterprises, LLC (1):
+      Use libsodium's CSPRNG instead of OpenSSL's
+
+Scott (1):
+      Update random.h
+
+Sean Bowe (3):
+      Bump protocol version in release process if necessary.
+      Fix use after free in transaction_tests.
+      Update libsnark.
+
+Simon Liu (16):
+      Closes #2057 by adding extra zrpcunsafe logging
+      Update z_sendmany logging
+      Add test to verify z_sendmany logging
+      Update test to verify order of zrpcunsafe log messages
+      Closes #2045 by allowing z_sendmany with 0 fee
+      Closes #2024 by documenting and testing method field in z_getoperationstatus
+      Add parameter interaction, where zrpcunsafe implies zrpc
+      Update zrpc vs zrpcunsafe logging in z_sendmany operation
+      Add test for z_sendmany with fee of 0
+      Update test to check for more joinsplit related fields in getrawtransaction
+      Add comment about fix for #2026.
+      Update test to check for updated error messages in AmountFromValue().
+      Bump version to 1.0.6 as part of release process
+      Debian man pages updated as part of release process
+      Update release notes as part of release process
+      Update debian changelog as part of release process
+
+Wladimir J. van der Laan (10):
+      Simplify RPCclient, adapt json_parse_error test
+      util: Add ParseInt64 and ParseDouble functions
+      univalue: add strict type checking
+      Don't go through double in AmountFromValue and ValueFromAmount
+      Get rid of fPlus argument to FormatMoney
+      Changes necessary now that zero values accepted in AmountFromValue
+      rpc: Accept scientific notation for monetary amounts in JSON
+      rpc: Make ValueFromAmount always return 8 decimals
+      univalue: Avoid unnecessary roundtrip through double for numbers
+      util: use locale-independent parsing in ParseDouble
+
+fanquake (3):
+      [depends] zeromq 4.0.7
+      [depends] ZeroMQ 4.1.4
+      [depends] ZeroMQ 4.1.5
+
+isle2983 (1):
+      [copyright] add MIT License copyright header to zmq_sub.py
+
+mrbandrews (1):
+      Fixes ZMQ startup with bad arguments.
+
+paveljanik (1):
+      [Trivial] start the help texts with lowercase
+
