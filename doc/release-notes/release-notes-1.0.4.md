@@ -64,4 +64,12 @@ Simon Liu (8):
       Closes #1857. Fixes bug where tx spending only notes had priority of 0.
       Closes #1901. Increase default settings for the max block size when     mining and the amount of space available for priority transactions.
       Closes #1903. Add fee parameter to z_sendmany.
-      Fixes #1823. Witness anchors for input notes no longer cross block bo
+      Fixes #1823. Witness anchors for input notes no longer cross block boundaries.
+      Increase timeout as laptops on battery power have cpu throttling.
+      WitnessAnchorData only needs to store one witness per JSOutPoint.
+
+lpescher (3):
+      Make command line option to show all debugging consistent with similar options
+      Update documentation to match the #4219 change
+      Update help message to match the #4219 change
+
