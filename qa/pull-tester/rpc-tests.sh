@@ -129,4 +129,7 @@ if [ "x${ENABLE_BITCOIND}${ENABLE_UTILS}${ENABLE_WALLET}" = "x111" ]; then
         exit 1
     else
         exit 0
-    
+    fi
+else
+  echo "No rpc tests to run. Wallet, utils, and bitcoind must all be enabled"
+fi
