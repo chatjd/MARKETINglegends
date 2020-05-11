@@ -263,4 +263,148 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         inputs  = [ {'txid' : utx['txid'], 'vout' : utx['vout']},{'txid' : utx2['txid'], 'vout' : utx2['vout']} ]
         outputs = { self.nodes[0].getnewaddress() : 6.0, self.nodes[0].getnewaddress() : 1.0 }
-        rawtx   = sel
+        rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
+        dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
+        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+
+        rawtxfund = self.nodes[2].fundrawtransaction(rawtx)
+        fee = rawtxfund['fee']
+        dec_tx  = self.nodes[2].decoderawtransaction(rawtxfund['hex'])
+        totalOut = 0
+        matchingOuts = 0
+        for out in dec_tx['vout']:
+            totalOut += out['value']
+            if outputs.has_key(out['scriptPubKey']['addresses'][0]):
+                matchingOuts+=1
+
+        assert_equal(matchingOuts, 2)
+        assert_equal(len(dec_tx['vout']), 3)
+
+        ##############################################
+        # test a fundrawtransaction with invalid vin #
+        ##############################################
+        listunspent = self.nodes[2].listunspent()
+        inputs  = [ {'txid' : "1c7f966dab21119bac53213a2bc7532bff1fa844c124fd750a7d0b1332440bd1", 'vout' : 0} ] #invalid vin!
+        outputs = { self.nodes[0].getnewaddress() : 1.0}
+        rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
+        dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
+
+        errorString = ""
+        try:
+            rawtxfund = self.nodes[2].fundrawtransaction(rawtx)
+        except JSONRPCException,e:
+            errorString = e.error['message']
+
+        assert_equal("Insufficient" in errorString, True);
+
+
+
+        ############################################################
+        #compare fee of a standard pubkeyhash transaction
+        inputs = []
+        outputs = {self.nodes[1].getnewaddress():1.1}
+        rawTx = self.nodes[0].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[0].fundrawtransaction(rawTx)
+
+        #create same transaction over sendtoaddress
+        txId = self.nodes[0].sendtoaddress(self.nodes[1].getnewaddress(), 1.1);
+        signedFee = self.nodes[0].getrawmempool(True)[txId]['fee']
+
+        #compare fee
+        feeDelta = Decimal(fundedTx['fee']) - Decimal(signedFee);
+        assert(feeDelta >= 0 and feeDelta <= feeTolerance)
+        ############################################################
+
+        ############################################################
+        #compare fee of a standard pubkeyhash transaction with multiple outputs
+        inputs = []
+        outputs = {self.nodes[1].getnewaddress():1.1,self.nodes[1].getnewaddress():1.2,self.nodes[1].getnewaddress():0.1,self.nodes[1].getnewaddress():1.3,self.nodes[1].getnewaddress():0.2,self.nodes[1].getnewaddress():0.3}
+        rawTx = self.nodes[0].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[0].fundrawtransaction(rawTx)
+        #create same transaction over sendtoaddress
+        txId = self.nodes[0].sendmany("", outputs);
+        signedFee = self.nodes[0].getrawmempool(True)[txId]['fee']
+
+        #compare fee
+        feeDelta = Decimal(fundedTx['fee']) - Decimal(signedFee);
+        assert(feeDelta >= 0 and feeDelta <= feeTolerance)
+        ############################################################
+
+
+        ############################################################
+        #compare fee of a 2of2 multisig p2sh transaction
+
+        # create 2of2 addr
+        addr1 = self.nodes[1].getnewaddress()
+        addr2 = self.nodes[1].getnewaddress()
+
+        addr1Obj = self.nodes[1].validateaddress(addr1)
+        addr2Obj = self.nodes[1].validateaddress(addr2)
+
+        mSigObj = self.nodes[1].addmultisigaddress(2, [addr1Obj['pubkey'], addr2Obj['pubkey']])
+
+        inputs = []
+        outputs = {mSigObj:1.1}
+        rawTx = self.nodes[0].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[0].fundrawtransaction(rawTx)
+
+        #create same transaction over sendtoaddress
+        txId = self.nodes[0].sendtoaddress(mSigObj, 1.1);
+        signedFee = self.nodes[0].getrawmempool(True)[txId]['fee']
+
+        #compare fee
+        feeDelta = Decimal(fundedTx['fee']) - Decimal(signedFee);
+        assert(feeDelta >= 0 and feeDelta <= feeTolerance)
+        ############################################################
+
+
+        ############################################################
+        #compare fee of a standard pubkeyhash transaction
+
+        # create 4of5 addr
+        addr1 = self.nodes[1].getnewaddress()
+        addr2 = self.nodes[1].getnewaddress()
+        addr3 = self.nodes[1].getnewaddress()
+        addr4 = self.nodes[1].getnewaddress()
+        addr5 = self.nodes[1].getnewaddress()
+
+        addr1Obj = self.nodes[1].validateaddress(addr1)
+        addr2Obj = self.nodes[1].validateaddress(addr2)
+        addr3Obj = self.nodes[1].validateaddress(addr3)
+        addr4Obj = self.nodes[1].validateaddress(addr4)
+        addr5Obj = self.nodes[1].validateaddress(addr5)
+
+        mSigObj = self.nodes[1].addmultisigaddress(4, [addr1Obj['pubkey'], addr2Obj['pubkey'], addr3Obj['pubkey'], addr4Obj['pubkey'], addr5Obj['pubkey']])
+
+        inputs = []
+        outputs = {mSigObj:1.1}
+        rawTx = self.nodes[0].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[0].fundrawtransaction(rawTx)
+
+        #create same transaction over sendtoaddress
+        txId = self.nodes[0].sendtoaddress(mSigObj, 1.1);
+        signedFee = self.nodes[0].getrawmempool(True)[txId]['fee']
+
+        #compare fee
+        feeDelta = Decimal(fundedTx['fee']) - Decimal(signedFee);
+        assert(feeDelta >= 0 and feeDelta <= feeTolerance)
+        ############################################################
+
+
+        ############################################################
+        # spend a 2of2 multisig transaction over fundraw
+
+        # create 2of2 addr
+        addr1 = self.nodes[2].getnewaddress()
+        addr2 = self.nodes[2].getnewaddress()
+
+        addr1Obj = self.nodes[2].validateaddress(addr1)
+        addr2Obj = self.nodes[2].validateaddress(addr2)
+
+        mSigObj = self.nodes[2].addmultisigaddress(2, [addr1Obj['pubkey'], addr2Obj['pubkey']])
+
+
+        # send 1.2 BTC to msig addr
+        txId = self.nodes[0].sendtoaddress(mSigObj, 1.2);
+        self.sync_all()
+        self.node
