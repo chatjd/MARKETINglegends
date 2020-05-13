@@ -407,4 +407,143 @@ class RawTransactionsTest(BitcoinTestFramework):
         # send 1.2 BTC to msig addr
         txId = self.nodes[0].sendtoaddress(mSigObj, 1.2);
         self.sync_all()
-        self.node
+        self.nodes[1].generate(1)
+        self.sync_all()
+
+        oldBalance = self.nodes[1].getbalance()
+        inputs = []
+        outputs = {self.nodes[1].getnewaddress():1.1}
+        rawTx = self.nodes[2].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[2].fundrawtransaction(rawTx)
+
+        signedTx = self.nodes[2].signrawtransaction(fundedTx['hex'])
+        txId = self.nodes[2].sendrawtransaction(signedTx['hex'])
+        self.sync_all()
+        self.nodes[1].generate(1)
+        self.sync_all()
+
+        # make sure funds are received at node1
+        assert_equal(oldBalance+Decimal('1.10000000'), self.nodes[1].getbalance())
+
+        ############################################################
+        # locked wallet test
+        self.nodes[1].encryptwallet("test")
+        self.nodes.pop(1)
+        stop_nodes(self.nodes)
+        wait_bitcoinds()
+
+        self.nodes = start_nodes(3, self.options.tmpdir)
+
+        connect_nodes_bi(self.nodes,0,1)
+        connect_nodes_bi(self.nodes,1,2)
+        connect_nodes_bi(self.nodes,0,2)
+        self.is_network_split=False
+        self.sync_all()
+
+        error = False
+        try:
+            self.nodes[1].sendtoaddress(self.nodes[0].getnewaddress(), 1.2);
+        except:
+            error = True
+        assert(error)
+
+        oldBalance = self.nodes[0].getbalance()
+
+        inputs = []
+        outputs = {self.nodes[0].getnewaddress():1.1}
+        rawTx = self.nodes[1].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[1].fundrawtransaction(rawTx)
+
+        #now we need to unlock
+        self.nodes[1].walletpassphrase("test", 100)
+        signedTx = self.nodes[1].signrawtransaction(fundedTx['hex'])
+        txId = self.nodes[1].sendrawtransaction(signedTx['hex'])
+        self.sync_all()
+        self.nodes[1].generate(1)
+        self.sync_all()
+
+        # make sure funds are received at node1
+        assert_equal(oldBalance+Decimal('11.10000000'), self.nodes[0].getbalance())
+
+
+
+        ###############################################
+        # multiple (~19) inputs tx test | Compare fee #
+        ###############################################
+
+        #empty node1, send some small coins from node0 to node1
+        self.nodes[1].sendtoaddress(self.nodes[0].getnewaddress(), self.nodes[1].getbalance(), "", "", True);
+        self.sync_all()
+        self.nodes[0].generate(1)
+        self.sync_all()
+
+        for i in range(0,20):
+            self.nodes[0].sendtoaddress(self.nodes[1].getnewaddress(), 0.01);
+        self.sync_all()
+        self.nodes[0].generate(1)
+        self.sync_all()
+
+        #fund a tx with ~20 small inputs
+        inputs = []
+        outputs = {self.nodes[0].getnewaddress():0.15,self.nodes[0].getnewaddress():0.04}
+        rawTx = self.nodes[1].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[1].fundrawtransaction(rawTx)
+
+        #create same transaction over sendtoaddress
+        txId = self.nodes[1].sendmany("", outputs);
+        signedFee = self.nodes[1].getrawmempool(True)[txId]['fee']
+
+        #compare fee
+        feeDelta = Decimal(fundedTx['fee']) - Decimal(signedFee);
+        assert(feeDelta >= 0 and feeDelta <= feeTolerance*19) #~19 inputs
+
+
+        #############################################
+        # multiple (~19) inputs tx test | sign/send #
+        #############################################
+
+        #again, empty node1, send some small coins from node0 to node1
+        self.nodes[1].sendtoaddress(self.nodes[0].getnewaddress(), self.nodes[1].getbalance(), "", "", True);
+        self.sync_all()
+        self.nodes[0].generate(1)
+        self.sync_all()
+
+        for i in range(0,20):
+            self.nodes[0].sendtoaddress(self.nodes[1].getnewaddress(), 0.01);
+        self.sync_all()
+        self.nodes[0].generate(1)
+        self.sync_all()
+
+        #fund a tx with ~20 small inputs
+        oldBalance = self.nodes[0].getbalance()
+
+        inputs = []
+        outputs = {self.nodes[0].getnewaddress():0.15,self.nodes[0].getnewaddress():0.04}
+        rawTx = self.nodes[1].createrawtransaction(inputs, outputs)
+        fundedTx = self.nodes[1].fundrawtransaction(rawTx)
+        fundedAndSignedTx = self.nodes[1].signrawtransaction(fundedTx['hex'])
+        txId = self.nodes[1].sendrawtransaction(fundedAndSignedTx['hex'])
+        self.sync_all()
+        self.nodes[0].generate(1)
+        self.sync_all()
+        assert_equal(oldBalance+Decimal('10.19000000'), self.nodes[0].getbalance()) #0.19+block reward
+
+        #####################################################
+        # test fundrawtransaction with OP_RETURN and no vin #
+        #####################################################
+
+        rawtx   = "0100000000010000000000000000066a047465737400000000"
+        dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
+
+        assert_equal(len(dec_tx['vin']), 0)
+        assert_equal(len(dec_tx['vout']), 1)
+
+        rawtxfund = self.nodes[2].fundrawtransaction(rawtx)
+        dec_tx  = self.nodes[2].decoderawtransaction(rawtxfund['hex'])
+
+        assert_greater_than(len(dec_tx['vin']), 0) # at least one vin
+        assert_equal(len(dec_tx['vout']), 2) # one change output added
+
+
+if __name__ == '__main__':
+    RawTransactionsTest().main()
