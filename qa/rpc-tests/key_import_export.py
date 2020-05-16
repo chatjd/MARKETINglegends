@@ -105,4 +105,8 @@ class KeyImportExportTest (BitcoinTestFramework):
             alice_to_bob(amount)
 
         verify_utxos(bob, amounts)
-       
+        verify_utxos(charlie, amounts)
+
+
+if __name__ == '__main__':
+    KeyImportExportTest().main()
