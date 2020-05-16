@@ -68,3 +68,24 @@ class MempoolCoinbaseTest(BitcoinTestFramework):
         spend_103_1_id = self.nodes[0].sendrawtransaction(spend_103_1_raw)
         [spend_103_1_id] # hush pyflakes
         self.nodes[0].generate(1)
+
+        # ... now put spend_101 and spend_102_1 in memory pools:
+        spend_101_id = self.nodes[0].sendrawtransaction(spend_101_raw)
+        spend_102_1_id = self.nodes[0].sendrawtransaction(spend_102_1_raw)
+
+        self.sync_all()
+
+        assert_equal(set(self.nodes[0].getrawmempool()), set([ spend_101_id, spend_102_1_id ]))
+
+        # Use invalidateblock to re-org back and make all those coinbase spends
+        # immature/invalid:
+        for node in self.nodes:
+            node.invalidateblock(new_blocks[0])
+
+        self.sync_all()
+
+        # mempool should be empty.
+        assert_equal(set(self.nodes[0].getrawmempool()), set())
+
+if __name__ == '__main__':
+    MempoolCoinbaseTest().main()
