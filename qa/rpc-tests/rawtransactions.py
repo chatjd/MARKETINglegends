@@ -138,4 +138,12 @@ class RawTransactionsTest(BitcoinTestFramework):
 
         rawTxSigned = self.nodes[2].signrawtransaction(rawTx, inputs)
         assert_equal(rawTxSigned['complete'], True) # node2 can sign the tx compl., own two of three keys
-        self.nodes[2].sendrawtrans
+        self.nodes[2].sendrawtransaction(rawTxSigned['hex'])
+        rawTx = self.nodes[0].decoderawtransaction(rawTxSigned['hex'])
+        self.sync_all()
+        self.nodes[0].generate(1)
+        self.sync_all()
+        assert_equal(self.nodes[0].getbalance(), bal+Decimal('10.00000000')+Decimal('2.19900000')) #block reward + tx
+
+if __name__ == '__main__':
+    RawTransactionsTest().main()
