@@ -131,4 +131,123 @@ class RESTTest (BitcoinTestFramework):
 
 
         ##################################################
-        # GETUTXOS: now check both wit
+        # GETUTXOS: now check both with the same request #
+        ##################################################
+        json_request = '/checkmempool/'+txid+'-'+str(n)+'/'+vintx+'-0'
+        json_string = http_get_call(url.hostname, url.port, '/rest/getutxos'+json_request+self.FORMAT_SEPARATOR+'json')
+        json_obj = json.loads(json_string)
+        assert_equal(len(json_obj['utxos']), 1)
+        assert_equal(json_obj['bitmap'], "10")
+
+        # test binary response
+        bb_hash = self.nodes[0].getbestblockhash()
+
+        binaryRequest = b'\x01\x02'
+        binaryRequest += binascii.unhexlify(txid)
+        binaryRequest += struct.pack("i", n);
+        binaryRequest += binascii.unhexlify(vintx);
+        binaryRequest += struct.pack("i", 0);
+
+        bin_response = http_post_call(url.hostname, url.port, '/rest/getutxos'+self.FORMAT_SEPARATOR+'bin', binaryRequest)
+        output = StringIO.StringIO()
+        output.write(bin_response)
+        output.seek(0)
+        chainHeight = struct.unpack("i", output.read(4))[0]
+        hashFromBinResponse = hex(deser_uint256(output))[2:].zfill(65).rstrip("L")
+
+        assert_equal(bb_hash, hashFromBinResponse) # check if getutxo's chaintip during calculation was fine
+        assert_equal(chainHeight, 102) # chain height must be 102
+
+
+        ############################
+        # GETUTXOS: mempool checks #
+        ############################
+
+        # do a tx and don't sync
+        txid = self.nodes[0].sendtoaddress(self.nodes[1].getnewaddress(), 0.1)
+        json_string = http_get_call(url.hostname, url.port, '/rest/tx/'+txid+self.FORMAT_SEPARATOR+"json")
+        json_obj = json.loads(json_string)
+        vintx = json_obj['vin'][0]['txid'] # get the vin to later check for utxo (should be spent by then)
+        # get n of 0.1 outpoint
+        n = 0
+        for vout in json_obj['vout']:
+            if vout['value'] == 0.1:
+                n = vout['n']
+
+        json_request = '/'+txid+'-'+str(n)
+        json_string = http_get_call(url.hostname, url.port, '/rest/getutxos'+json_request+self.FORMAT_SEPARATOR+'json')
+        json_obj = json.loads(json_string)
+        assert_equal(len(json_obj['utxos']), 0) # there should be a outpoint because it has just added to the mempool
+
+        json_request = '/checkmempool/'+txid+'-'+str(n)
+        json_string = http_get_call(url.hostname, url.port, '/rest/getutxos'+json_request+self.FORMAT_SEPARATOR+'json')
+        json_obj = json.loads(json_string)
+        assert_equal(len(json_obj['utxos']), 1) # there should be a outpoint because it has just added to the mempool
+
+        # do some invalid requests
+        json_request = '{"checkmempool'
+        response = http_post_call(url.hostname, url.port, '/rest/getutxos'+self.FORMAT_SEPARATOR+'json', json_request, True)
+        assert_equal(response.status, 500) # must be a 500 because we send a invalid json request
+
+        json_request = '{"checkmempool'
+        response = http_post_call(url.hostname, url.port, '/rest/getutxos'+self.FORMAT_SEPARATOR+'bin', json_request, True)
+        assert_equal(response.status, 500) # must be a 500 because we send a invalid bin request
+
+        response = http_post_call(url.hostname, url.port, '/rest/getutxos/checkmempool'+self.FORMAT_SEPARATOR+'bin', '', True)
+        assert_equal(response.status, 500) # must be a 500 because we send a invalid bin request
+
+        # test limits
+        json_request = '/checkmempool/'
+        for x in range(0, 20):
+            json_request += txid+'-'+str(n)+'/'
+        json_request = json_request.rstrip("/")
+        response = http_post_call(url.hostname, url.port, '/rest/getutxos'+json_request+self.FORMAT_SEPARATOR+'json', '', True)
+        assert_equal(response.status, 500) # must be a 500 because we exceeding the limits
+
+        json_request = '/checkmempool/'
+        for x in range(0, 15):
+            json_request += txid+'-'+str(n)+'/'
+        json_request = json_request.rstrip("/");
+        response = http_post_call(url.hostname, url.port, '/rest/getutxos'+json_request+self.FORMAT_SEPARATOR+'json', '', True)
+        assert_equal(response.status, 200) # must be a 500 because we exceeding the limits
+
+        self.nodes[0].generate(1) # generate block to not affect upcoming tests
+        self.sync_all()
+
+        ################
+        # /rest/block/ #
+        ################
+
+        # Block header length of 177 is:
+        # - 108 bytes: regular fields
+        # -  32 bytes: nonce
+        # -  37 bytes: Equihash solution:
+        #              - 1 byte length
+        #              - 2^k ((n/(k+1))+1)-bit indices.
+        #                For regtest parameters (n = 48, k = 5),
+        #                this is 32 9-bit indices
+
+        # check binary format
+        response = http_get_call(url.hostname, url.port, '/rest/block/'+bb_hash+self.FORMAT_SEPARATOR+"bin", True)
+        assert_equal(response.status, 200)
+        assert_greater_than(int(response.getheader('content-length')), 177)
+        response_str = response.read()
+
+        # compare with block header
+        response_header = http_get_call(url.hostname, url.port, '/rest/headers/1/'+bb_hash+self.FORMAT_SEPARATOR+"bin", True)
+        assert_equal(response_header.status, 200)
+        assert_equal(int(response_header.getheader('content-length')), 177)
+        response_header_str = response_header.read()
+        assert_equal(response_str[0:177], response_header_str)
+
+        # check block hex format
+        response_hex = http_get_call(url.hostname, url.port, '/rest/block/'+bb_hash+self.FORMAT_SEPARATOR+"hex", True)
+        assert_equal(response_hex.status, 200)
+        assert_greater_than(int(response_hex.getheader('content-length')), 354)
+        response_hex_str = response_hex.read()
+        assert_equal(response_str.encode("hex")[0:354], response_hex_str[0:354])
+
+        # compare with hex block header
+        response_header_hex = http_get_call(url.hostname, url.port, '/rest/headers/1/'+bb_hash+self.FORMAT_SEPARATOR+"hex", True)
+        assert_equal(response_header_hex.status, 200)
+        assert_greater_than(int(r
