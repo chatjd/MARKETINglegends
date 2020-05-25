@@ -134,4 +134,125 @@ def check_estimates(node, fees_seen, max_invalid, print_estimates = True):
         if valid_estimate and e < 0:
             raise AssertionError("Invalid estimate appears at higher confirm count than valid estimate")
     # Check on the expected number of different confirmation counts
-    # that we mi
+    # that we might not have valid estimates for
+    if invalid_estimates > max_invalid:
+        raise AssertionError("More than (%d) invalid estimates"%(max_invalid))
+    return all_estimates
+
+
+class EstimateFeeTest(BitcoinTestFramework):
+
+    def setup_network(self):
+        '''
+        We'll setup the network to have 3 nodes that all mine with different parameters.
+        But first we need to use one node to create a lot of small low priority outputs
+        which we will use to generate our transactions.
+        '''
+        self.nodes = []
+        # Use node0 to mine blocks for input splitting
+        self.nodes.append(start_node(0, self.options.tmpdir, ["-maxorphantx=1000",
+                                                              "-relaypriority=0", "-whitelist=127.0.0.1"]))
+
+        print("This test is time consuming, please be patient")
+        print("Splitting inputs to small size so we can generate low priority tx's")
+        self.txouts = []
+        self.txouts2 = []
+        # Split a coinbase into two transaction puzzle outputs
+        split_inputs(self.nodes[0], self.nodes[0].listunspent(0), self.txouts, True)
+
+        # Mine
+        while (len(self.nodes[0].getrawmempool()) > 0):
+            self.nodes[0].generate(1)
+
+        # Repeatedly split those 2 outputs, doubling twice for each rep
+        # Use txouts to monitor the available utxo, since these won't be tracked in wallet
+        reps = 0
+        while (reps < 5):
+            #Double txouts to txouts2
+            while (len(self.txouts)>0):
+                split_inputs(self.nodes[0], self.txouts, self.txouts2)
+            while (len(self.nodes[0].getrawmempool()) > 0):
+                self.nodes[0].generate(1)
+            #Double txouts2 to txouts
+            while (len(self.txouts2)>0):
+                split_inputs(self.nodes[0], self.txouts2, self.txouts)
+            while (len(self.nodes[0].getrawmempool()) > 0):
+                self.nodes[0].generate(1)
+            reps += 1
+        print("Finished splitting")
+
+        # Now we can connect the other nodes, didn't want to connect them earlier
+        # so the estimates would not be affected by the splitting transactions
+        # Node1 mines small blocks but that are bigger than the expected transaction rate,
+        # and allows free transactions.
+        # NOTE: the CreateNewBlock code starts counting block size at 1,000 bytes,
+        # (17k is room enough for 110 or so transactions)
+        self.nodes.append(start_node(1, self.options.tmpdir,
+                                     ["-blockprioritysize=1500", "-blockmaxsize=18000",
+                                      "-maxorphantx=1000", "-relaypriority=0", "-debug=estimatefee"]))
+        connect_nodes(self.nodes[1], 0)
+
+        # Node2 is a stingy miner, that
+        # produces too small blocks (room for only 70 or so transactions)
+        node2args = ["-blockprioritysize=0", "-blockmaxsize=12000", "-maxorphantx=1000", "-relaypriority=0"]
+
+        self.nodes.append(start_node(2, self.options.tmpdir, node2args))
+        connect_nodes(self.nodes[0], 2)
+        connect_nodes(self.nodes[2], 1)
+
+        self.is_network_split = False
+        self.sync_all()
+
+    def transact_and_mine(self, numblocks, mining_node):
+        min_fee = Decimal("0.00001")
+        # We will now mine numblocks blocks generating on average 100 transactions between each block
+        # We shuffle our confirmed txout set before each set of transactions
+        # small_txpuzzle_randfee will use the transactions that have inputs already in the chain when possible
+        # resorting to tx's that depend on the mempool when those run out
+        for i in range(numblocks):
+            random.shuffle(self.confutxo)
+            for j in range(random.randrange(100-50,100+50)):
+                from_index = random.randint(1,2)
+                (txhex, fee) = small_txpuzzle_randfee(self.nodes[from_index], self.confutxo,
+                                                      self.memutxo, Decimal("0.005"), min_fee, min_fee)
+                tx_kbytes = (len(txhex)/2)/1000.0
+                self.fees_per_kb.append(float(fee)/tx_kbytes)
+            sync_mempools(self.nodes[0:3],.1)
+            mined = mining_node.getblock(mining_node.generate(1)[0],True)["tx"]
+            sync_blocks(self.nodes[0:3],.1)
+            #update which txouts are confirmed
+            newmem = []
+            for utx in self.memutxo:
+                if utx["txid"] in mined:
+                    self.confutxo.append(utx)
+                else:
+                    newmem.append(utx)
+            self.memutxo = newmem
+
+    def run_test(self):
+        self.fees_per_kb = []
+        self.memutxo = []
+        self.confutxo = self.txouts # Start with the set of confirmed txouts after splitting
+        print("Checking estimates for 1/2/3/6/15/25 blocks")
+        print("Creating transactions and mining them with a huge block size")
+        # Create transactions and mine 20 big blocks with node 0 such that the mempool is always emptied
+        self.transact_and_mine(30, self.nodes[0])
+        check_estimates(self.nodes[1], self.fees_per_kb, 1)
+
+        print("Creating transactions and mining them with a block size that can't keep up")
+        # Create transactions and mine 30 small blocks with node 2, but create txs faster than we can mine
+        self.transact_and_mine(20, self.nodes[2])
+        check_estimates(self.nodes[1], self.fees_per_kb, 3)
+
+        print("Creating transactions and mining them at a block size that is just big enough")
+        # Generate transactions while mining 40 more blocks, this time with node1
+        # which mines blocks with capacity just above the rate that transactions are being created
+        self.transact_and_mine(40, self.nodes[1])
+        check_estimates(self.nodes[1], self.fees_per_kb, 2)
+
+        # Finish by mining a normal-sized block:
+        while len(self.nodes[1].getrawmempool()) > 0:
+            self.nodes[1].generate(1)
+
+        sync_blocks(self.nodes[0:3],.1)
+        print("Final estimates after emptying mempools")
