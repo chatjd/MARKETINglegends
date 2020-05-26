@@ -256,3 +256,7 @@ class EstimateFeeTest(BitcoinTestFramework):
 
         sync_blocks(self.nodes[0:3],.1)
         print("Final estimates after emptying mempools")
+        check_estimates(self.nodes[1], self.fees_per_kb, 2)
+
+if __name__ == '__main__':
+    EstimateFeeTest().main()
