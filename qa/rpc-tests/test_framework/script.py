@@ -644,4 +644,173 @@ class CScript(bytes):
     A bytes subclass, so you can use this directly whenever bytes are accepted.
     Note that this means that indexing does *not* work - you'll get an index by
     byte rather than opcode. This format was chosen for efficiency so that the
-    general case would not require creating a lot of little CSc
+    general case would not require creating a lot of little CScriptOP objects.
+
+    iter(script) however does iterate by opcode.
+    """
+    @classmethod
+    def __coerce_instance(cls, other):
+        # Coerce other into bytes
+        if isinstance(other, CScriptOp):
+            other = bchr(other)
+        elif isinstance(other, CScriptNum):
+            if (other.value == 0):
+                other = bchr(CScriptOp(OP_0))
+            else:
+                other = CScriptNum.encode(other)
+        elif isinstance(other, (int, long)):
+            if 0 <= other <= 16:
+                other = bytes(bchr(CScriptOp.encode_op_n(other)))
+            elif other == -1:
+                other = bytes(bchr(OP_1NEGATE))
+            else:
+                other = CScriptOp.encode_op_pushdata(bignum.bn2vch(other))
+        elif isinstance(other, (bytes, bytearray)):
+            other = bytes(CScriptOp.encode_op_pushdata(other))
+        return other
+
+    def __add__(self, other):
+        # Do the coercion outside of the try block so that errors in it are
+        # noticed.
+        other = self.__coerce_instance(other)
+
+        try:
+            # bytes.__add__ always returns bytes instances unfortunately
+            return CScript(super(CScript, self).__add__(other))
+        except TypeError:
+            raise TypeError('Can not add a %r instance to a CScript' % other.__class__)
+
+    def join(self, iterable):
+        # join makes no sense for a CScript()
+        raise NotImplementedError
+
+    def __new__(cls, value=b''):
+        if isinstance(value, bytes) or isinstance(value, bytearray):
+            return super(CScript, cls).__new__(cls, value)
+        else:
+            def coerce_iterable(iterable):
+                for instance in iterable:
+                    yield cls.__coerce_instance(instance)
+            # Annoyingly on both python2 and python3 bytes.join() always
+            # returns a bytes instance even when subclassed.
+            return super(CScript, cls).__new__(cls, b''.join(coerce_iterable(value)))
+
+    def raw_iter(self):
+        """Raw iteration
+
+        Yields tuples of (opcode, data, sop_idx) so that the different possible
+        PUSHDATA encodings can be accurately distinguished, as well as
+        determining the exact opcode byte indexes. (sop_idx)
+        """
+        i = 0
+        while i < len(self):
+            sop_idx = i
+            opcode = bord(self[i])
+            i += 1
+
+            if opcode > OP_PUSHDATA4:
+                yield (opcode, None, sop_idx)
+            else:
+                datasize = None
+                pushdata_type = None
+                if opcode < OP_PUSHDATA1:
+                    pushdata_type = 'PUSHDATA(%d)' % opcode
+                    datasize = opcode
+
+                elif opcode == OP_PUSHDATA1:
+                    pushdata_type = 'PUSHDATA1'
+                    if i >= len(self):
+                        raise CScriptInvalidError('PUSHDATA1: missing data length')
+                    datasize = bord(self[i])
+                    i += 1
+
+                elif opcode == OP_PUSHDATA2:
+                    pushdata_type = 'PUSHDATA2'
+                    if i + 1 >= len(self):
+                        raise CScriptInvalidError('PUSHDATA2: missing data length')
+                    datasize = bord(self[i]) + (bord(self[i+1]) << 8)
+                    i += 2
+
+                elif opcode == OP_PUSHDATA4:
+                    pushdata_type = 'PUSHDATA4'
+                    if i + 3 >= len(self):
+                        raise CScriptInvalidError('PUSHDATA4: missing data length')
+                    datasize = bord(self[i]) + (bord(self[i+1]) << 8) + (bord(self[i+2]) << 16) + (bord(self[i+3]) << 24)
+                    i += 4
+
+                else:
+                    assert False # shouldn't happen
+
+
+                data = bytes(self[i:i+datasize])
+
+                # Check for truncation
+                if len(data) < datasize:
+                    raise CScriptTruncatedPushDataError('%s: truncated data' % pushdata_type, data)
+
+                i += datasize
+
+                yield (opcode, data, sop_idx)
+
+    def __iter__(self):
+        """'Cooked' iteration
+
+        Returns either a CScriptOP instance, an integer, or bytes, as
+        appropriate.
+
+        See raw_iter() if you need to distinguish the different possible
+        PUSHDATA encodings.
+        """
+        for (opcode, data, sop_idx) in self.raw_iter():
+            if data is not None:
+                yield data
+            else:
+                opcode = CScriptOp(opcode)
+
+                if opcode.is_small_int():
+                    yield opcode.decode_op_n()
+                else:
+                    yield CScriptOp(opcode)
+
+    def __repr__(self):
+        # For Python3 compatibility add b before strings so testcases don't
+        # need to change
+        def _repr(o):
+            if isinstance(o, bytes):
+                return "x('%s')" % binascii.hexlify(o).decode('utf8')
+            else:
+                return repr(o)
+
+        ops = []
+        i = iter(self)
+        while True:
+            op = None
+            try:
+                op = _repr(next(i))
+            except CScriptTruncatedPushDataError as err:
+                op = '%s...<ERROR: %s>' % (_repr(err.data), err)
+                break
+            except CScriptInvalidError as err:
+                op = '<ERROR: %s>' % err
+                break
+            except StopIteration:
+                break
+            finally:
+                if op is not None:
+                    ops.append(op)
+
+        return "CScript([%s])" % ', '.join(ops)
+
+    def GetSigOpCount(self, fAccurate):
+        """Get the SigOp count.
+
+        fAccurate - Accurately count CHECKMULTISIG, see BIP16 for details.
+
+        Note that this is consensus-critical.
+        """
+        n = 0
+        lastOpcode = OP_INVALIDOPCODE
+        for (opcode, data, sop_idx) in self.raw_iter():
+            if opcode in (OP_CHECKSIG, OP_CHECKSIGVERIFY):
+                n += 1
+            elif opcode in (OP_CHECKMULTISIG, O
