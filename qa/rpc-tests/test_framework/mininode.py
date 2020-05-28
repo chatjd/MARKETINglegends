@@ -405,4 +405,203 @@ class ZCProof(object):
                repr(self.g_K), repr(self.g_H))
 
 
-ZC
+ZC_NUM_JS_INPUTS = 2
+ZC_NUM_JS_OUTPUTS = 2
+
+ZC_NOTEPLAINTEXT_LEADING = 1
+ZC_V_SIZE = 8
+ZC_RHO_SIZE = 32
+ZC_R_SIZE = 32
+ZC_MEMO_SIZE = 512
+
+ZC_NOTEPLAINTEXT_SIZE = (
+  ZC_NOTEPLAINTEXT_LEADING +
+  ZC_V_SIZE +
+  ZC_RHO_SIZE +
+  ZC_R_SIZE +
+  ZC_MEMO_SIZE
+)
+
+NOTEENCRYPTION_AUTH_BYTES = 16
+
+ZC_NOTECIPHERTEXT_SIZE = (
+  ZC_NOTEPLAINTEXT_SIZE +
+  NOTEENCRYPTION_AUTH_BYTES
+)
+
+class JSDescription(object):
+    def __init__(self):
+        self.vpub_old = 0
+        self.vpub_new = 0
+        self.anchor = 0
+        self.nullifiers = [0] * ZC_NUM_JS_INPUTS
+        self.commitments = [0] * ZC_NUM_JS_OUTPUTS
+        self.onetimePubKey = 0
+        self.randomSeed = 0
+        self.macs = [0] * ZC_NUM_JS_INPUTS
+        self.proof = None
+        self.ciphertexts = [None] * ZC_NUM_JS_OUTPUTS
+
+    def deserialize(self, f):
+        self.vpub_old = struct.unpack("<q", f.read(8))[0]
+        self.vpub_new = struct.unpack("<q", f.read(8))[0]
+        self.anchor = deser_uint256(f)
+
+        self.nullifiers = []
+        for i in range(ZC_NUM_JS_INPUTS):
+            self.nullifiers.append(deser_uint256(f))
+
+        self.commitments = []
+        for i in range(ZC_NUM_JS_OUTPUTS):
+            self.commitments.append(deser_uint256(f))
+
+        self.onetimePubKey = deser_uint256(f)
+        self.randomSeed = deser_uint256(f)
+
+        self.macs = []
+        for i in range(ZC_NUM_JS_INPUTS):
+            self.macs.append(deser_uint256(f))
+
+        self.proof = ZCProof()
+        self.proof.deserialize(f)
+
+        self.ciphertexts = []
+        for i in range(ZC_NUM_JS_OUTPUTS):
+            self.ciphertexts.append(f.read(ZC_NOTECIPHERTEXT_SIZE))
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<q", self.vpub_old)
+        r += struct.pack("<q", self.vpub_new)
+        r += ser_uint256(self.anchor)
+        for i in range(ZC_NUM_JS_INPUTS):
+            r += ser_uint256(self.nullifiers[i])
+        for i in range(ZC_NUM_JS_OUTPUTS):
+            r += ser_uint256(self.commitments[i])
+        r += ser_uint256(self.onetimePubKey)
+        r += ser_uint256(self.randomSeed)
+        for i in range(ZC_NUM_JS_INPUTS):
+            r += ser_uint256(self.macs[i])
+        r += self.proof.serialize()
+        for i in range(ZC_NUM_JS_OUTPUTS):
+            r += ser_uint256(self.ciphertexts[i])
+        return r
+
+    def __repr__(self):
+        return "JSDescription(vpub_old=%i.%08i vpub_new=%i.%08i anchor=%064x onetimePubKey=%064x randomSeed=%064x proof=%s)" \
+            % (self.vpub_old, self.vpub_new, self.anchor,
+               self.onetimePubKey, self.randomSeed, repr(self.proof))
+
+
+class COutPoint(object):
+    def __init__(self, hash=0, n=0):
+        self.hash = hash
+        self.n = n
+
+    def deserialize(self, f):
+        self.hash = deser_uint256(f)
+        self.n = struct.unpack("<I", f.read(4))[0]
+
+    def serialize(self):
+        r = ""
+        r += ser_uint256(self.hash)
+        r += struct.pack("<I", self.n)
+        return r
+
+    def __repr__(self):
+        return "COutPoint(hash=%064x n=%i)" % (self.hash, self.n)
+
+
+class CTxIn(object):
+    def __init__(self, outpoint=None, scriptSig="", nSequence=0):
+        if outpoint is None:
+            self.prevout = COutPoint()
+        else:
+            self.prevout = outpoint
+        self.scriptSig = scriptSig
+        self.nSequence = nSequence
+
+    def deserialize(self, f):
+        self.prevout = COutPoint()
+        self.prevout.deserialize(f)
+        self.scriptSig = deser_string(f)
+        self.nSequence = struct.unpack("<I", f.read(4))[0]
+
+    def serialize(self):
+        r = ""
+        r += self.prevout.serialize()
+        r += ser_string(self.scriptSig)
+        r += struct.pack("<I", self.nSequence)
+        return r
+
+    def __repr__(self):
+        return "CTxIn(prevout=%s scriptSig=%s nSequence=%i)" \
+            % (repr(self.prevout), binascii.hexlify(self.scriptSig),
+               self.nSequence)
+
+
+class CTxOut(object):
+    def __init__(self, nValue=0, scriptPubKey=""):
+        self.nValue = nValue
+        self.scriptPubKey = scriptPubKey
+
+    def deserialize(self, f):
+        self.nValue = struct.unpack("<q", f.read(8))[0]
+        self.scriptPubKey = deser_string(f)
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<q", self.nValue)
+        r += ser_string(self.scriptPubKey)
+        return r
+
+    def __repr__(self):
+        return "CTxOut(nValue=%i.%08i scriptPubKey=%s)" \
+            % (self.nValue // 100000000, self.nValue % 100000000,
+               binascii.hexlify(self.scriptPubKey))
+
+
+class CTransaction(object):
+    def __init__(self, tx=None):
+        if tx is None:
+            self.nVersion = 1
+            self.vin = []
+            self.vout = []
+            self.nLockTime = 0
+            self.vjoinsplit = []
+            self.joinSplitPubKey = None
+            self.joinSplitSig = None
+            self.sha256 = None
+            self.hash = None
+        else:
+            self.nVersion = tx.nVersion
+            self.vin = copy.deepcopy(tx.vin)
+            self.vout = copy.deepcopy(tx.vout)
+            self.nLockTime = tx.nLockTime
+            self.vjoinsplit = copy.deepcopy(tx.vjoinsplit)
+            self.joinSplitPubKey = tx.joinSplitPubKey
+            self.joinSplitSig = tx.joinSplitSig
+            self.sha256 = None
+            self.hash = None
+
+    def deserialize(self, f):
+        self.nVersion = struct.unpack("<i", f.read(4))[0]
+        self.vin = deser_vector(f, CTxIn)
+        self.vout = deser_vector(f, CTxOut)
+        self.nLockTime = struct.unpack("<I", f.read(4))[0]
+        if self.nVersion >= 2:
+            self.vjoinsplit = deser_vector(f, JSDescription)
+            if len(self.vjoinsplit) > 0:
+                self.joinSplitPubKey = deser_uint256(f)
+                self.joinSplitSig = f.read(64)
+        self.sha256 = None
+        self.hash = None
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<i", self.nVersion)
+        r += ser_vector(self.vin)
+        r += ser_vector(self.vout)
+        r += struct.pack("<I", self.nLockTime)
+        if self.nVersion >= 2:
+            r += 
