@@ -968,4 +968,274 @@ class msg_alert(object):
         return r
 
     def __repr__(self):
-        return "msg_alert(ale
+        return "msg_alert(alert=%s)" % (repr(self.alert), )
+
+
+class msg_inv(object):
+    command = "inv"
+
+    def __init__(self, inv=None):
+        if inv is None:
+            self.inv = []
+        else:
+            self.inv = inv
+
+    def deserialize(self, f):
+        self.inv = deser_vector(f, CInv)
+
+    def serialize(self):
+        return ser_vector(self.inv)
+
+    def __repr__(self):
+        return "msg_inv(inv=%s)" % (repr(self.inv))
+
+
+class msg_getdata(object):
+    command = "getdata"
+
+    def __init__(self):
+        self.inv = []
+
+    def deserialize(self, f):
+        self.inv = deser_vector(f, CInv)
+
+    def serialize(self):
+        return ser_vector(self.inv)
+
+    def __repr__(self):
+        return "msg_getdata(inv=%s)" % (repr(self.inv))
+
+
+class msg_getblocks(object):
+    command = "getblocks"
+
+    def __init__(self):
+        self.locator = CBlockLocator()
+        self.hashstop = 0L
+
+    def deserialize(self, f):
+        self.locator = CBlockLocator()
+        self.locator.deserialize(f)
+        self.hashstop = deser_uint256(f)
+
+    def serialize(self):
+        r = ""
+        r += self.locator.serialize()
+        r += ser_uint256(self.hashstop)
+        return r
+
+    def __repr__(self):
+        return "msg_getblocks(locator=%s hashstop=%064x)" \
+            % (repr(self.locator), self.hashstop)
+
+
+class msg_tx(object):
+    command = "tx"
+
+    def __init__(self, tx=CTransaction()):
+        self.tx = tx
+
+    def deserialize(self, f):
+        self.tx.deserialize(f)
+
+    def serialize(self):
+        return self.tx.serialize()
+
+    def __repr__(self):
+        return "msg_tx(tx=%s)" % (repr(self.tx))
+
+
+class msg_block(object):
+    command = "block"
+
+    def __init__(self, block=None):
+        if block is None:
+            self.block = CBlock()
+        else:
+            self.block = block
+
+    def deserialize(self, f):
+        self.block.deserialize(f)
+
+    def serialize(self):
+        return self.block.serialize()
+
+    def __repr__(self):
+        return "msg_block(block=%s)" % (repr(self.block))
+
+
+class msg_getaddr(object):
+    command = "getaddr"
+
+    def __init__(self):
+        pass
+
+    def deserialize(self, f):
+        pass
+
+    def serialize(self):
+        return ""
+
+    def __repr__(self):
+        return "msg_getaddr()"
+
+
+class msg_ping_prebip31(object):
+    command = "ping"
+
+    def __init__(self):
+        pass
+
+    def deserialize(self, f):
+        pass
+
+    def serialize(self):
+        return ""
+
+    def __repr__(self):
+        return "msg_ping() (pre-bip31)"
+
+
+class msg_ping(object):
+    command = "ping"
+
+    def __init__(self, nonce=0L):
+        self.nonce = nonce
+
+    def deserialize(self, f):
+        self.nonce = struct.unpack("<Q", f.read(8))[0]
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<Q", self.nonce)
+        return r
+
+    def __repr__(self):
+        return "msg_ping(nonce=%08x)" % self.nonce
+
+
+class msg_pong(object):
+    command = "pong"
+
+    def __init__(self, nonce=0L):
+        self.nonce = nonce
+
+    def deserialize(self, f):
+        self.nonce = struct.unpack("<Q", f.read(8))[0]
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<Q", self.nonce)
+        return r
+
+    def __repr__(self):
+        return "msg_pong(nonce=%08x)" % self.nonce
+
+
+class msg_mempool(object):
+    command = "mempool"
+
+    def __init__(self):
+        pass
+
+    def deserialize(self, f):
+        pass
+
+    def serialize(self):
+        return ""
+
+    def __repr__(self):
+        return "msg_mempool()"
+
+
+# getheaders message has
+# number of entries
+# vector of hashes
+# hash_stop (hash of last desired block header, 0 to get as many as possible)
+class msg_getheaders(object):
+    command = "getheaders"
+
+    def __init__(self):
+        self.locator = CBlockLocator()
+        self.hashstop = 0L
+
+    def deserialize(self, f):
+        self.locator = CBlockLocator()
+        self.locator.deserialize(f)
+        self.hashstop = deser_uint256(f)
+
+    def serialize(self):
+        r = ""
+        r += self.locator.serialize()
+        r += ser_uint256(self.hashstop)
+        return r
+
+    def __repr__(self):
+        return "msg_getheaders(locator=%s, stop=%064x)" \
+            % (repr(self.locator), self.hashstop)
+
+
+# headers message has
+# <count> <vector of block headers>
+class msg_headers(object):
+    command = "headers"
+
+    def __init__(self):
+        self.headers = []
+
+    def deserialize(self, f):
+        # comment in bitcoind indicates these should be deserialized as blocks
+        blocks = deser_vector(f, CBlock)
+        for x in blocks:
+            self.headers.append(CBlockHeader(x))
+
+    def serialize(self):
+        blocks = [CBlock(x) for x in self.headers]
+        return ser_vector(blocks)
+
+    def __repr__(self):
+        return "msg_headers(headers=%s)" % repr(self.headers)
+
+
+class msg_reject(object):
+    command = "reject"
+
+    def __init__(self):
+        self.message = ""
+        self.code = ""
+        self.reason = ""
+        self.data = 0L
+
+    def deserialize(self, f):
+        self.message = deser_string(f)
+        self.code = struct.unpack("<B", f.read(1))[0]
+        self.reason = deser_string(f)
+        if (self.message == "block" or self.message == "tx"):
+            self.data = deser_uint256(f)
+
+    def serialize(self):
+        r = ser_string(self.message)
+        r += struct.pack("<B", self.code)
+        r += ser_string(self.reason)
+        if (self.message == "block" or self.message == "tx"):
+            r += ser_uint256(self.data)
+        return r
+
+    def __repr__(self):
+        return "msg_reject: %s %d %s [%064x]" \
+            % (self.message, self.code, self.reason, self.data)
+
+
+# This is what a callback should look like for NodeConn
+# Reimplement the on_* functions to provide handling for events
+class NodeConnCB(object):
+    def __init__(self):
+        self.verack_received = False
+
+    # Derived classes should call this function once to set the message map
+    # which associates the derived classes' functions to incoming messages
+    def create_callback_map(self):
+        self.cbmap = {
+            "version": self.on_version,
+            "verack": self.on_verack,
+            "addr": se
