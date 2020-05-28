@@ -776,4 +776,196 @@ class CBlock(CBlockHeader):
             solns = gbp_basic(curr_digest, n, k)
             for soln in solns:
                 assert(gbp_validate(curr_digest, soln, n, k))
-                self.nS
+                self.nSolution = soln
+                self.rehash()
+                if self.sha256 <= target:
+                    return
+            self.nNonce += 1
+
+    def __repr__(self):
+        return "CBlock(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x hashReserved=%064x nTime=%s nBits=%08x nNonce=%064x nSolution=%s vtx=%s)" \
+            % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot,
+               self.hashReserved, time.ctime(self.nTime), self.nBits,
+               self.nNonce, repr(self.nSolution), repr(self.vtx))
+
+
+class CUnsignedAlert(object):
+    def __init__(self):
+        self.nVersion = 1
+        self.nRelayUntil = 0
+        self.nExpiration = 0
+        self.nID = 0
+        self.nCancel = 0
+        self.setCancel = []
+        self.nMinVer = 0
+        self.nMaxVer = 0
+        self.setSubVer = []
+        self.nPriority = 0
+        self.strComment = ""
+        self.strStatusBar = ""
+        self.strReserved = ""
+
+    def deserialize(self, f):
+        self.nVersion = struct.unpack("<i", f.read(4))[0]
+        self.nRelayUntil = struct.unpack("<q", f.read(8))[0]
+        self.nExpiration = struct.unpack("<q", f.read(8))[0]
+        self.nID = struct.unpack("<i", f.read(4))[0]
+        self.nCancel = struct.unpack("<i", f.read(4))[0]
+        self.setCancel = deser_int_vector(f)
+        self.nMinVer = struct.unpack("<i", f.read(4))[0]
+        self.nMaxVer = struct.unpack("<i", f.read(4))[0]
+        self.setSubVer = deser_string_vector(f)
+        self.nPriority = struct.unpack("<i", f.read(4))[0]
+        self.strComment = deser_string(f)
+        self.strStatusBar = deser_string(f)
+        self.strReserved = deser_string(f)
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<i", self.nVersion)
+        r += struct.pack("<q", self.nRelayUntil)
+        r += struct.pack("<q", self.nExpiration)
+        r += struct.pack("<i", self.nID)
+        r += struct.pack("<i", self.nCancel)
+        r += ser_int_vector(self.setCancel)
+        r += struct.pack("<i", self.nMinVer)
+        r += struct.pack("<i", self.nMaxVer)
+        r += ser_string_vector(self.setSubVer)
+        r += struct.pack("<i", self.nPriority)
+        r += ser_string(self.strComment)
+        r += ser_string(self.strStatusBar)
+        r += ser_string(self.strReserved)
+        return r
+
+    def __repr__(self):
+        return "CUnsignedAlert(nVersion %d, nRelayUntil %d, nExpiration %d, nID %d, nCancel %d, nMinVer %d, nMaxVer %d, nPriority %d, strComment %s, strStatusBar %s, strReserved %s)" \
+            % (self.nVersion, self.nRelayUntil, self.nExpiration, self.nID,
+               self.nCancel, self.nMinVer, self.nMaxVer, self.nPriority,
+               self.strComment, self.strStatusBar, self.strReserved)
+
+
+class CAlert(object):
+    def __init__(self):
+        self.vchMsg = ""
+        self.vchSig = ""
+
+    def deserialize(self, f):
+        self.vchMsg = deser_string(f)
+        self.vchSig = deser_string(f)
+
+    def serialize(self):
+        r = ""
+        r += ser_string(self.vchMsg)
+        r += ser_string(self.vchSig)
+        return r
+
+    def __repr__(self):
+        return "CAlert(vchMsg.sz %d, vchSig.sz %d)" \
+            % (len(self.vchMsg), len(self.vchSig))
+
+
+# Objects that correspond to messages on the wire
+class msg_version(object):
+    command = "version"
+
+    def __init__(self):
+        self.nVersion = MY_VERSION
+        self.nServices = 1
+        self.nTime = time.time()
+        self.addrTo = CAddress()
+        self.addrFrom = CAddress()
+        self.nNonce = random.getrandbits(64)
+        self.strSubVer = MY_SUBVERSION
+        self.nStartingHeight = -1
+
+    def deserialize(self, f):
+        self.nVersion = struct.unpack("<i", f.read(4))[0]
+        if self.nVersion == 10300:
+            self.nVersion = 300
+        self.nServices = struct.unpack("<Q", f.read(8))[0]
+        self.nTime = struct.unpack("<q", f.read(8))[0]
+        self.addrTo = CAddress()
+        self.addrTo.deserialize(f)
+        if self.nVersion >= 106:
+            self.addrFrom = CAddress()
+            self.addrFrom.deserialize(f)
+            self.nNonce = struct.unpack("<Q", f.read(8))[0]
+            self.strSubVer = deser_string(f)
+            if self.nVersion >= 209:
+                self.nStartingHeight = struct.unpack("<i", f.read(4))[0]
+            else:
+                self.nStartingHeight = None
+        else:
+            self.addrFrom = None
+            self.nNonce = None
+            self.strSubVer = None
+            self.nStartingHeight = None
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<i", self.nVersion)
+        r += struct.pack("<Q", self.nServices)
+        r += struct.pack("<q", self.nTime)
+        r += self.addrTo.serialize()
+        r += self.addrFrom.serialize()
+        r += struct.pack("<Q", self.nNonce)
+        r += ser_string(self.strSubVer)
+        r += struct.pack("<i", self.nStartingHeight)
+        return r
+
+    def __repr__(self):
+        return 'msg_version(nVersion=%i nServices=%i nTime=%s addrTo=%s addrFrom=%s nNonce=0x%016X strSubVer=%s nStartingHeight=%i)' \
+            % (self.nVersion, self.nServices, time.ctime(self.nTime),
+               repr(self.addrTo), repr(self.addrFrom), self.nNonce,
+               self.strSubVer, self.nStartingHeight)
+
+
+class msg_verack(object):
+    command = "verack"
+
+    def __init__(self):
+        pass
+
+    def deserialize(self, f):
+        pass
+
+    def serialize(self):
+        return ""
+
+    def __repr__(self):
+        return "msg_verack()"
+
+
+class msg_addr(object):
+    command = "addr"
+
+    def __init__(self):
+        self.addrs = []
+
+    def deserialize(self, f):
+        self.addrs = deser_vector(f, CAddress)
+
+    def serialize(self):
+        return ser_vector(self.addrs)
+
+    def __repr__(self):
+        return "msg_addr(addrs=%s)" % (repr(self.addrs))
+
+
+class msg_alert(object):
+    command = "alert"
+
+    def __init__(self):
+        self.alert = CAlert()
+
+    def deserialize(self, f):
+        self.alert = CAlert()
+        self.alert.deserialize(f)
+
+    def serialize(self):
+        r = ""
+        r += self.alert.serialize()
+        return r
+
+    def __repr__(self):
+        return "msg_alert(ale
