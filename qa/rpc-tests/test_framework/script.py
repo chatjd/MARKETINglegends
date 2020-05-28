@@ -125,4 +125,311 @@ OP_9 = CScriptOp(0x59)
 OP_10 = CScriptOp(0x5a)
 OP_11 = CScriptOp(0x5b)
 OP_12 = CScriptOp(0x5c)
-OP_13 =
+OP_13 = CScriptOp(0x5d)
+OP_14 = CScriptOp(0x5e)
+OP_15 = CScriptOp(0x5f)
+OP_16 = CScriptOp(0x60)
+
+# control
+OP_NOP = CScriptOp(0x61)
+OP_VER = CScriptOp(0x62)
+OP_IF = CScriptOp(0x63)
+OP_NOTIF = CScriptOp(0x64)
+OP_VERIF = CScriptOp(0x65)
+OP_VERNOTIF = CScriptOp(0x66)
+OP_ELSE = CScriptOp(0x67)
+OP_ENDIF = CScriptOp(0x68)
+OP_VERIFY = CScriptOp(0x69)
+OP_RETURN = CScriptOp(0x6a)
+
+# stack ops
+OP_TOALTSTACK = CScriptOp(0x6b)
+OP_FROMALTSTACK = CScriptOp(0x6c)
+OP_2DROP = CScriptOp(0x6d)
+OP_2DUP = CScriptOp(0x6e)
+OP_3DUP = CScriptOp(0x6f)
+OP_2OVER = CScriptOp(0x70)
+OP_2ROT = CScriptOp(0x71)
+OP_2SWAP = CScriptOp(0x72)
+OP_IFDUP = CScriptOp(0x73)
+OP_DEPTH = CScriptOp(0x74)
+OP_DROP = CScriptOp(0x75)
+OP_DUP = CScriptOp(0x76)
+OP_NIP = CScriptOp(0x77)
+OP_OVER = CScriptOp(0x78)
+OP_PICK = CScriptOp(0x79)
+OP_ROLL = CScriptOp(0x7a)
+OP_ROT = CScriptOp(0x7b)
+OP_SWAP = CScriptOp(0x7c)
+OP_TUCK = CScriptOp(0x7d)
+
+# splice ops
+OP_CAT = CScriptOp(0x7e)
+OP_SUBSTR = CScriptOp(0x7f)
+OP_LEFT = CScriptOp(0x80)
+OP_RIGHT = CScriptOp(0x81)
+OP_SIZE = CScriptOp(0x82)
+
+# bit logic
+OP_INVERT = CScriptOp(0x83)
+OP_AND = CScriptOp(0x84)
+OP_OR = CScriptOp(0x85)
+OP_XOR = CScriptOp(0x86)
+OP_EQUAL = CScriptOp(0x87)
+OP_EQUALVERIFY = CScriptOp(0x88)
+OP_RESERVED1 = CScriptOp(0x89)
+OP_RESERVED2 = CScriptOp(0x8a)
+
+# numeric
+OP_1ADD = CScriptOp(0x8b)
+OP_1SUB = CScriptOp(0x8c)
+OP_2MUL = CScriptOp(0x8d)
+OP_2DIV = CScriptOp(0x8e)
+OP_NEGATE = CScriptOp(0x8f)
+OP_ABS = CScriptOp(0x90)
+OP_NOT = CScriptOp(0x91)
+OP_0NOTEQUAL = CScriptOp(0x92)
+
+OP_ADD = CScriptOp(0x93)
+OP_SUB = CScriptOp(0x94)
+OP_MUL = CScriptOp(0x95)
+OP_DIV = CScriptOp(0x96)
+OP_MOD = CScriptOp(0x97)
+OP_LSHIFT = CScriptOp(0x98)
+OP_RSHIFT = CScriptOp(0x99)
+
+OP_BOOLAND = CScriptOp(0x9a)
+OP_BOOLOR = CScriptOp(0x9b)
+OP_NUMEQUAL = CScriptOp(0x9c)
+OP_NUMEQUALVERIFY = CScriptOp(0x9d)
+OP_NUMNOTEQUAL = CScriptOp(0x9e)
+OP_LESSTHAN = CScriptOp(0x9f)
+OP_GREATERTHAN = CScriptOp(0xa0)
+OP_LESSTHANOREQUAL = CScriptOp(0xa1)
+OP_GREATERTHANOREQUAL = CScriptOp(0xa2)
+OP_MIN = CScriptOp(0xa3)
+OP_MAX = CScriptOp(0xa4)
+
+OP_WITHIN = CScriptOp(0xa5)
+
+# crypto
+OP_RIPEMD160 = CScriptOp(0xa6)
+OP_SHA1 = CScriptOp(0xa7)
+OP_SHA256 = CScriptOp(0xa8)
+OP_HASH160 = CScriptOp(0xa9)
+OP_HASH256 = CScriptOp(0xaa)
+OP_CODESEPARATOR = CScriptOp(0xab)
+OP_CHECKSIG = CScriptOp(0xac)
+OP_CHECKSIGVERIFY = CScriptOp(0xad)
+OP_CHECKMULTISIG = CScriptOp(0xae)
+OP_CHECKMULTISIGVERIFY = CScriptOp(0xaf)
+
+# expansion
+OP_NOP1 = CScriptOp(0xb0)
+OP_NOP2 = CScriptOp(0xb1)
+OP_NOP3 = CScriptOp(0xb2)
+OP_NOP4 = CScriptOp(0xb3)
+OP_NOP5 = CScriptOp(0xb4)
+OP_NOP6 = CScriptOp(0xb5)
+OP_NOP7 = CScriptOp(0xb6)
+OP_NOP8 = CScriptOp(0xb7)
+OP_NOP9 = CScriptOp(0xb8)
+OP_NOP10 = CScriptOp(0xb9)
+
+# template matching params
+OP_SMALLINTEGER = CScriptOp(0xfa)
+OP_PUBKEYS = CScriptOp(0xfb)
+OP_PUBKEYHASH = CScriptOp(0xfd)
+OP_PUBKEY = CScriptOp(0xfe)
+
+OP_INVALIDOPCODE = CScriptOp(0xff)
+
+VALID_OPCODES = {
+    OP_1NEGATE,
+    OP_RESERVED,
+    OP_1,
+    OP_2,
+    OP_3,
+    OP_4,
+    OP_5,
+    OP_6,
+    OP_7,
+    OP_8,
+    OP_9,
+    OP_10,
+    OP_11,
+    OP_12,
+    OP_13,
+    OP_14,
+    OP_15,
+    OP_16,
+
+    OP_NOP,
+    OP_VER,
+    OP_IF,
+    OP_NOTIF,
+    OP_VERIF,
+    OP_VERNOTIF,
+    OP_ELSE,
+    OP_ENDIF,
+    OP_VERIFY,
+    OP_RETURN,
+
+    OP_TOALTSTACK,
+    OP_FROMALTSTACK,
+    OP_2DROP,
+    OP_2DUP,
+    OP_3DUP,
+    OP_2OVER,
+    OP_2ROT,
+    OP_2SWAP,
+    OP_IFDUP,
+    OP_DEPTH,
+    OP_DROP,
+    OP_DUP,
+    OP_NIP,
+    OP_OVER,
+    OP_PICK,
+    OP_ROLL,
+    OP_ROT,
+    OP_SWAP,
+    OP_TUCK,
+
+    OP_CAT,
+    OP_SUBSTR,
+    OP_LEFT,
+    OP_RIGHT,
+    OP_SIZE,
+
+    OP_INVERT,
+    OP_AND,
+    OP_OR,
+    OP_XOR,
+    OP_EQUAL,
+    OP_EQUALVERIFY,
+    OP_RESERVED1,
+    OP_RESERVED2,
+
+    OP_1ADD,
+    OP_1SUB,
+    OP_2MUL,
+    OP_2DIV,
+    OP_NEGATE,
+    OP_ABS,
+    OP_NOT,
+    OP_0NOTEQUAL,
+
+    OP_ADD,
+    OP_SUB,
+    OP_MUL,
+    OP_DIV,
+    OP_MOD,
+    OP_LSHIFT,
+    OP_RSHIFT,
+
+    OP_BOOLAND,
+    OP_BOOLOR,
+    OP_NUMEQUAL,
+    OP_NUMEQUALVERIFY,
+    OP_NUMNOTEQUAL,
+    OP_LESSTHAN,
+    OP_GREATERTHAN,
+    OP_LESSTHANOREQUAL,
+    OP_GREATERTHANOREQUAL,
+    OP_MIN,
+    OP_MAX,
+
+    OP_WITHIN,
+
+    OP_RIPEMD160,
+    OP_SHA1,
+    OP_SHA256,
+    OP_HASH160,
+    OP_HASH256,
+    OP_CODESEPARATOR,
+    OP_CHECKSIG,
+    OP_CHECKSIGVERIFY,
+    OP_CHECKMULTISIG,
+    OP_CHECKMULTISIGVERIFY,
+
+    OP_NOP1,
+    OP_NOP2,
+    OP_NOP3,
+    OP_NOP4,
+    OP_NOP5,
+    OP_NOP6,
+    OP_NOP7,
+    OP_NOP8,
+    OP_NOP9,
+    OP_NOP10,
+
+    OP_SMALLINTEGER,
+    OP_PUBKEYS,
+    OP_PUBKEYHASH,
+    OP_PUBKEY,
+}
+
+OPCODE_NAMES.update({
+    OP_0 : 'OP_0',
+    OP_PUSHDATA1 : 'OP_PUSHDATA1',
+    OP_PUSHDATA2 : 'OP_PUSHDATA2',
+    OP_PUSHDATA4 : 'OP_PUSHDATA4',
+    OP_1NEGATE : 'OP_1NEGATE',
+    OP_RESERVED : 'OP_RESERVED',
+    OP_1 : 'OP_1',
+    OP_2 : 'OP_2',
+    OP_3 : 'OP_3',
+    OP_4 : 'OP_4',
+    OP_5 : 'OP_5',
+    OP_6 : 'OP_6',
+    OP_7 : 'OP_7',
+    OP_8 : 'OP_8',
+    OP_9 : 'OP_9',
+    OP_10 : 'OP_10',
+    OP_11 : 'OP_11',
+    OP_12 : 'OP_12',
+    OP_13 : 'OP_13',
+    OP_14 : 'OP_14',
+    OP_15 : 'OP_15',
+    OP_16 : 'OP_16',
+    OP_NOP : 'OP_NOP',
+    OP_VER : 'OP_VER',
+    OP_IF : 'OP_IF',
+    OP_NOTIF : 'OP_NOTIF',
+    OP_VERIF : 'OP_VERIF',
+    OP_VERNOTIF : 'OP_VERNOTIF',
+    OP_ELSE : 'OP_ELSE',
+    OP_ENDIF : 'OP_ENDIF',
+    OP_VERIFY : 'OP_VERIFY',
+    OP_RETURN : 'OP_RETURN',
+    OP_TOALTSTACK : 'OP_TOALTSTACK',
+    OP_FROMALTSTACK : 'OP_FROMALTSTACK',
+    OP_2DROP : 'OP_2DROP',
+    OP_2DUP : 'OP_2DUP',
+    OP_3DUP : 'OP_3DUP',
+    OP_2OVER : 'OP_2OVER',
+    OP_2ROT : 'OP_2ROT',
+    OP_2SWAP : 'OP_2SWAP',
+    OP_IFDUP : 'OP_IFDUP',
+    OP_DEPTH : 'OP_DEPTH',
+    OP_DROP : 'OP_DROP',
+    OP_DUP : 'OP_DUP',
+    OP_NIP : 'OP_NIP',
+    OP_OVER : 'OP_OVER',
+    OP_PICK : 'OP_PICK',
+    OP_ROLL : 'OP_ROLL',
+    OP_ROT : 'OP_ROT',
+    OP_SWAP : 'OP_SWAP',
+    OP_TUCK : 'OP_TUCK',
+    OP_CAT : 'OP_CAT',
+    OP_SUBSTR : 'OP_SUBSTR',
+    OP_LEFT : 'OP_LEFT',
+    OP_RIGHT : 'OP_RIGHT',
+    OP_SIZE : 'OP_SIZE',
+    OP_INVERT : 'OP_INVERT',
+    OP_AND : 'OP_AND',
+    OP_OR : 'OP_OR',
+    OP_XOR : 'OP_XOR',
+    OP_EQUAL : 'OP_EQUAL',
+    OP_EQUALVERIFY : 'OP_EQUALVERIFY',
+    OP_RESERVED1 : 'OP_RESERVE
