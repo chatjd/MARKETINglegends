@@ -1238,4 +1238,190 @@ class NodeConnCB(object):
         self.cbmap = {
             "version": self.on_version,
             "verack": self.on_verack,
-            "addr": se
+            "addr": self.on_addr,
+            "alert": self.on_alert,
+            "inv": self.on_inv,
+            "getdata": self.on_getdata,
+            "getblocks": self.on_getblocks,
+            "tx": self.on_tx,
+            "block": self.on_block,
+            "getaddr": self.on_getaddr,
+            "ping": self.on_ping,
+            "pong": self.on_pong,
+            "headers": self.on_headers,
+            "getheaders": self.on_getheaders,
+            "reject": self.on_reject,
+            "mempool": self.on_mempool
+        }
+
+    def deliver(self, conn, message):
+        with mininode_lock:
+            try:
+                self.cbmap[message.command](conn, message)
+            except:
+                print "ERROR delivering %s (%s)" % (repr(message),
+                                                    sys.exc_info()[0])
+
+    def on_version(self, conn, message):
+        if message.nVersion >= 209:
+            conn.send_message(msg_verack())
+        conn.ver_send = min(MY_VERSION, message.nVersion)
+        if message.nVersion < 209:
+            conn.ver_recv = conn.ver_send
+
+    def on_verack(self, conn, message):
+        conn.ver_recv = conn.ver_send
+        self.verack_received = True
+
+    def on_inv(self, conn, message):
+        want = msg_getdata()
+        for i in message.inv:
+            if i.type != 0:
+                want.inv.append(i)
+        if len(want.inv):
+            conn.send_message(want)
+
+    def on_addr(self, conn, message): pass
+    def on_alert(self, conn, message): pass
+    def on_getdata(self, conn, message): pass
+    def on_getblocks(self, conn, message): pass
+    def on_tx(self, conn, message): pass
+    def on_block(self, conn, message): pass
+    def on_getaddr(self, conn, message): pass
+    def on_headers(self, conn, message): pass
+    def on_getheaders(self, conn, message): pass
+    def on_ping(self, conn, message):
+        if conn.ver_send > BIP0031_VERSION:
+            conn.send_message(msg_pong(message.nonce))
+    def on_reject(self, conn, message): pass
+    def on_close(self, conn): pass
+    def on_mempool(self, conn): pass
+    def on_pong(self, conn, message): pass
+
+
+# The actual NodeConn class
+# This class provides an interface for a p2p connection to a specified node
+class NodeConn(asyncore.dispatcher):
+    messagemap = {
+        "version": msg_version,
+        "verack": msg_verack,
+        "addr": msg_addr,
+        "alert": msg_alert,
+        "inv": msg_inv,
+        "getdata": msg_getdata,
+        "getblocks": msg_getblocks,
+        "tx": msg_tx,
+        "block": msg_block,
+        "getaddr": msg_getaddr,
+        "ping": msg_ping,
+        "pong": msg_pong,
+        "headers": msg_headers,
+        "getheaders": msg_getheaders,
+        "reject": msg_reject,
+        "mempool": msg_mempool
+    }
+    MAGIC_BYTES = {
+        "mainnet": "\x24\xe9\x27\x64",   # mainnet
+        "testnet3": "\xfa\x1a\xf9\xbf",  # testnet3
+        "regtest": "\xaa\xe8\x3f\x5f"    # regtest
+    }
+
+    def __init__(self, dstaddr, dstport, rpc, callback, net="regtest"):
+        asyncore.dispatcher.__init__(self, map=mininode_socket_map)
+        self.log = logging.getLogger("NodeConn(%s:%d)" % (dstaddr, dstport))
+        self.dstaddr = dstaddr
+        self.dstport = dstport
+        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sendbuf = ""
+        self.recvbuf = ""
+        self.ver_send = 209
+        self.ver_recv = 209
+        self.last_sent = 0
+        self.state = "connecting"
+        self.network = net
+        self.cb = callback
+        self.disconnect = False
+
+        # stuff version msg into sendbuf
+        vt = msg_version()
+        vt.addrTo.ip = self.dstaddr
+        vt.addrTo.port = self.dstport
+        vt.addrFrom.ip = "0.0.0.0"
+        vt.addrFrom.port = 0
+        self.send_message(vt, True)
+        print 'MiniNode: Connecting to Bitcoin Node IP # ' + dstaddr + ':' \
+            + str(dstport)
+
+        try:
+            self.connect((dstaddr, dstport))
+        except:
+            self.handle_close()
+        self.rpc = rpc
+
+    def show_debug_msg(self, msg):
+        self.log.debug(msg)
+
+    def handle_connect(self):
+        self.show_debug_msg("MiniNode: Connected & Listening: \n")
+        self.state = "connected"
+
+    def handle_close(self):
+        self.show_debug_msg("MiniNode: Closing Connection to %s:%d... "
+                            % (self.dstaddr, self.dstport))
+        self.state = "closed"
+        self.recvbuf = ""
+        self.sendbuf = ""
+        try:
+            self.close()
+        except:
+            pass
+        self.cb.on_close(self)
+
+    def handle_read(self):
+        try:
+            t = self.recv(8192)
+            if len(t) > 0:
+                self.recvbuf += t
+                self.got_data()
+        except:
+            pass
+
+    def readable(self):
+        return True
+
+    def writable(self):
+        with mininode_lock:
+            length = len(self.sendbuf)
+        return (length > 0)
+
+    def handle_write(self):
+        with mininode_lock:
+            try:
+                sent = self.send(self.sendbuf)
+            except:
+                self.handle_close()
+                return
+            self.sendbuf = self.sendbuf[sent:]
+
+    def got_data(self):
+        while True:
+            if len(self.recvbuf) < 4:
+                return
+            if self.recvbuf[:4] != self.MAGIC_BYTES[self.network]:
+                raise ValueError("got garbage %s" % repr(self.recvbuf))
+            if self.ver_recv < 209:
+                if len(self.recvbuf) < 4 + 12 + 4:
+                    return
+                command = self.recvbuf[4:4+12].split("\x00", 1)[0]
+                msglen = struct.unpack("<i", self.recvbuf[4+12:4+12+4])[0]
+                checksum = None
+                if len(self.recvbuf) < 4 + 12 + 4 + msglen:
+                    return
+                msg = self.recvbuf[4+12+4:4+12+4+msglen]
+                self.recvbuf = self.recvbuf[4+12+4+msglen:]
+            else:
+                if len(self.recvbuf) < 4 + 12 + 4 + 4:
+                    return
+                command = self.recvbuf[4:4+12].split("\x00", 1)[0]
+                msglen = struct.unpack("<i", self.recvbuf[4+12:4+12+4])[0]
+      
