@@ -604,4 +604,176 @@ class CTransaction(object):
         r += ser_vector(self.vout)
         r += struct.pack("<I", self.nLockTime)
         if self.nVersion >= 2:
-            r += 
+            r += ser_vector(self.vjoinsplit)
+            if len(self.vjoinsplit) > 0:
+                r += ser_uint256(self.joinSplitPubKey)
+                r += self.joinSplitSig
+        return r
+
+    def rehash(self):
+        self.sha256 = None
+        self.calc_sha256()
+
+    def calc_sha256(self):
+        if self.sha256 is None:
+            self.sha256 = uint256_from_str(hash256(self.serialize()))
+        self.hash = hash256(self.serialize())[::-1].encode('hex_codec')
+
+    def is_valid(self):
+        self.calc_sha256()
+        for tout in self.vout:
+            if tout.nValue < 0 or tout.nValue > 21000000L * 100000000L:
+                return False
+        return True
+
+    def __repr__(self):
+        r = "CTransaction(nVersion=%i vin=%s vout=%s nLockTime=%i" \
+            % (self.nVersion, repr(self.vin), repr(self.vout), self.nLockTime)
+        if self.nVersion >= 2:
+            r += " vjoinsplit=%s" % repr(self.vjoinsplit)
+            if len(self.vjoinsplit) > 0:
+                r += " joinSplitPubKey=%064x joinSplitSig=%064x" \
+                    (self.joinSplitPubKey, self.joinSplitSig)
+        r += ")"
+        return r
+
+
+class CBlockHeader(object):
+    def __init__(self, header=None):
+        if header is None:
+            self.set_null()
+        else:
+            self.nVersion = header.nVersion
+            self.hashPrevBlock = header.hashPrevBlock
+            self.hashMerkleRoot = header.hashMerkleRoot
+            self.hashReserved = header.hashReserved
+            self.nTime = header.nTime
+            self.nBits = header.nBits
+            self.nNonce = header.nNonce
+            self.nSolution = header.nSolution
+            self.sha256 = header.sha256
+            self.hash = header.hash
+            self.calc_sha256()
+
+    def set_null(self):
+        self.nVersion = 4
+        self.hashPrevBlock = 0
+        self.hashMerkleRoot = 0
+        self.hashReserved = 0
+        self.nTime = 0
+        self.nBits = 0
+        self.nNonce = 0
+        self.nSolution = []
+        self.sha256 = None
+        self.hash = None
+
+    def deserialize(self, f):
+        self.nVersion = struct.unpack("<i", f.read(4))[0]
+        self.hashPrevBlock = deser_uint256(f)
+        self.hashMerkleRoot = deser_uint256(f)
+        self.hashReserved = deser_uint256(f)
+        self.nTime = struct.unpack("<I", f.read(4))[0]
+        self.nBits = struct.unpack("<I", f.read(4))[0]
+        self.nNonce = deser_uint256(f)
+        self.nSolution = deser_char_vector(f)
+        self.sha256 = None
+        self.hash = None
+
+    def serialize(self):
+        r = ""
+        r += struct.pack("<i", self.nVersion)
+        r += ser_uint256(self.hashPrevBlock)
+        r += ser_uint256(self.hashMerkleRoot)
+        r += ser_uint256(self.hashReserved)
+        r += struct.pack("<I", self.nTime)
+        r += struct.pack("<I", self.nBits)
+        r += ser_uint256(self.nNonce)
+        r += ser_char_vector(self.nSolution)
+        return r
+
+    def calc_sha256(self):
+        if self.sha256 is None:
+            r = ""
+            r += struct.pack("<i", self.nVersion)
+            r += ser_uint256(self.hashPrevBlock)
+            r += ser_uint256(self.hashMerkleRoot)
+            r += ser_uint256(self.hashReserved)
+            r += struct.pack("<I", self.nTime)
+            r += struct.pack("<I", self.nBits)
+            r += ser_uint256(self.nNonce)
+            r += ser_char_vector(self.nSolution)
+            self.sha256 = uint256_from_str(hash256(r))
+            self.hash = hash256(r)[::-1].encode('hex_codec')
+
+    def rehash(self):
+        self.sha256 = None
+        self.calc_sha256()
+        return self.sha256
+
+    def __repr__(self):
+        return "CBlockHeader(nVersion=%i hashPrevBlock=%064x hashMerkleRoot=%064x hashReserved=%064x nTime=%s nBits=%08x nNonce=%064x nSolution=%s)" \
+            % (self.nVersion, self.hashPrevBlock, self.hashMerkleRoot, self.hashReserved,
+               time.ctime(self.nTime), self.nBits, self.nNonce, repr(self.nSolution))
+
+
+class CBlock(CBlockHeader):
+    def __init__(self, header=None):
+        super(CBlock, self).__init__(header)
+        self.vtx = []
+
+    def deserialize(self, f):
+        super(CBlock, self).deserialize(f)
+        self.vtx = deser_vector(f, CTransaction)
+
+    def serialize(self):
+        r = ""
+        r += super(CBlock, self).serialize()
+        r += ser_vector(self.vtx)
+        return r
+
+    def calc_merkle_root(self):
+        hashes = []
+        for tx in self.vtx:
+            tx.calc_sha256()
+            hashes.append(ser_uint256(tx.sha256))
+        while len(hashes) > 1:
+            newhashes = []
+            for i in xrange(0, len(hashes), 2):
+                i2 = min(i+1, len(hashes)-1)
+                newhashes.append(hash256(hashes[i] + hashes[i2]))
+            hashes = newhashes
+        return uint256_from_str(hashes[0])
+
+    def is_valid(self, n=48, k=5):
+        # H(I||...
+        digest = blake2b(digest_size=(512/n)*n/8, person=vidulum_person(n, k))
+        digest.update(super(CBlock, self).serialize()[:108])
+        hash_nonce(digest, self.nNonce)
+        if not gbp_validate(self.nSolution, digest, n, k):
+            return False
+        self.calc_sha256()
+        target = uint256_from_compact(self.nBits)
+        if self.sha256 > target:
+            return False
+        for tx in self.vtx:
+            if not tx.is_valid():
+                return False
+        if self.calc_merkle_root() != self.hashMerkleRoot:
+            return False
+        return True
+
+    def solve(self, n=48, k=5):
+        target = uint256_from_compact(self.nBits)
+        # H(I||...
+        digest = blake2b(digest_size=(512/n)*n/8, person=vidulum_person(n, k))
+        digest.update(super(CBlock, self).serialize()[:108])
+        self.nNonce = 0
+        while True:
+            # H(I||V||...
+            curr_digest = digest.copy()
+            hash_nonce(curr_digest, self.nNonce)
+            # (x_1, x_2, ...) = A(I, V, n, k)
+            solns = gbp_basic(curr_digest, n, k)
+            for soln in solns:
+                assert(gbp_validate(curr_digest, soln, n, k))
+                self.nS
