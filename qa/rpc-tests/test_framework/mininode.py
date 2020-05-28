@@ -1424,4 +1424,75 @@ class NodeConn(asyncore.dispatcher):
                     return
                 command = self.recvbuf[4:4+12].split("\x00", 1)[0]
                 msglen = struct.unpack("<i", self.recvbuf[4+12:4+12+4])[0]
-      
+                checksum = self.recvbuf[4+12+4:4+12+4+4]
+                if len(self.recvbuf) < 4 + 12 + 4 + 4 + msglen:
+                    return
+                msg = self.recvbuf[4+12+4+4:4+12+4+4+msglen]
+                th = sha256(msg)
+                h = sha256(th)
+                if checksum != h[:4]:
+                    raise ValueError("got bad checksum " + repr(self.recvbuf))
+                self.recvbuf = self.recvbuf[4+12+4+4+msglen:]
+            if command in self.messagemap:
+                f = cStringIO.StringIO(msg)
+                t = self.messagemap[command]()
+                t.deserialize(f)
+                self.got_message(t)
+            else:
+                self.show_debug_msg("Unknown command: '" + command + "' " +
+                                    repr(msg))
+
+    def send_message(self, message, pushbuf=False):
+        if self.state != "connected" and not pushbuf:
+            return
+        self.show_debug_msg("Send %s" % repr(message))
+        command = message.command
+        data = message.serialize()
+        tmsg = self.MAGIC_BYTES[self.network]
+        tmsg += command
+        tmsg += "\x00" * (12 - len(command))
+        tmsg += struct.pack("<I", len(data))
+        if self.ver_send >= 209:
+            th = sha256(data)
+            h = sha256(th)
+            tmsg += h[:4]
+        tmsg += data
+        with mininode_lock:
+            self.sendbuf += tmsg
+            self.last_sent = time.time()
+
+    def got_message(self, message):
+        if message.command == "version":
+            if message.nVersion <= BIP0031_VERSION:
+                self.messagemap['ping'] = msg_ping_prebip31
+        if self.last_sent + 30 * 60 < time.time():
+            self.send_message(self.messagemap['ping']())
+        self.show_debug_msg("Recv %s" % repr(message))
+        self.cb.deliver(self, message)
+
+    def disconnect_node(self):
+        self.disconnect = True
+
+
+class NetworkThread(Thread):
+    def run(self):
+        while mininode_socket_map:
+            # We check for whether to disconnect outside of the asyncore
+            # loop to workaround the behavior of asyncore when using
+            # select
+            disconnected = []
+            for fd, obj in mininode_socket_map.items():
+                if obj.disconnect:
+                    disconnected.append(obj)
+            [ obj.handle_close() for obj in disconnected ]
+            asyncore.loop(0.1, use_poll=True, map=mininode_socket_map, count=1)
+
+
+# An exception we can raise if we detect a potential disconnect
+# (p2p or rpc) before the test is complete
+class EarlyDisconnectError(Exception):
+    def __init__(self, value):
+        self.value = value
+
+    def __str__(self):
+        return repr(self.value)
