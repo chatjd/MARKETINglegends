@@ -101,4 +101,60 @@ class Socks5Connection(object):
             if atyp == AddressType.IPV4:
                 addr = recvall(self.conn, 4)
             elif atyp == AddressType.DOMAINNAME:
-                n = recvall(self.conn, 1)
+                n = recvall(self.conn, 1)[0]
+                addr = str(recvall(self.conn, n))
+            elif atyp == AddressType.IPV6:
+                addr = recvall(self.conn, 16)
+            else:
+                raise IOError('Unknown address type %i' % atyp)
+            port_hi,port_lo = recvall(self.conn, 2)
+            port = (port_hi << 8) | port_lo
+
+            # Send dummy response
+            self.conn.sendall(bytearray([0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]))
+
+            cmdin = Socks5Command(cmd, atyp, addr, port, username, password)
+            self.serv.queue.put(cmdin)
+            print('Proxy: ', cmdin)
+            # Fall through to disconnect
+        except Exception,e:
+            traceback.print_exc(file=sys.stderr)
+            self.serv.queue.put(e)
+        finally:
+            self.conn.close()
+
+class Socks5Server(object):
+    def __init__(self, conf):
+        self.conf = conf
+        self.s = socket.socket(conf.af)
+        self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.s.bind(conf.addr)
+        self.s.listen(5)
+        self.running = False
+        self.thread = None
+        self.queue = Queue.Queue() # report connections and exceptions to client
+
+    def run(self):
+        while self.running:
+            (sockconn, peer) = self.s.accept()
+            if self.running:
+                conn = Socks5Connection(self, sockconn, peer)
+                thread = threading.Thread(None, conn.handle)
+                thread.daemon = True
+                thread.start()
+    
+    def start(self):
+        assert(not self.running)
+        self.running = True
+        self.thread = threading.Thread(None, self.run)
+        self.thread.daemon = True
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        # connect to self to end run loop
+        s = socket.socket(self.conf.af)
+        s.connect(self.conf.addr)
+        s.close()
+        self.thread.join()
+
