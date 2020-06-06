@@ -285,4 +285,116 @@ def make_change(from_node, amount_in, amount_out, fee):
         # Create an extra change output to break up big inputs
         change_address = from_node.getnewaddress()
         # Split change in two, being careful of rounding:
-        
+        outputs[change_address] = Decimal(change/2).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+        change = amount_in - amount - outputs[change_address]
+    if change > 0:
+        outputs[from_node.getnewaddress()] = change
+    return outputs
+
+def send_zeropri_transaction(from_node, to_node, amount, fee):
+    """
+    Create&broadcast a zero-priority transaction.
+    Returns (txid, hex-encoded-txdata)
+    Ensures transaction is zero-priority by first creating a send-to-self,
+    then using its output
+    """
+
+    # Create a send-to-self with confirmed inputs:
+    self_address = from_node.getnewaddress()
+    (total_in, inputs) = gather_inputs(from_node, amount+fee*2)
+    outputs = make_change(from_node, total_in, amount+fee, fee)
+    outputs[self_address] = float(amount+fee)
+
+    self_rawtx = from_node.createrawtransaction(inputs, outputs)
+    self_signresult = from_node.signrawtransaction(self_rawtx)
+    self_txid = from_node.sendrawtransaction(self_signresult["hex"], True)
+
+    vout = find_output(from_node, self_txid, amount+fee)
+    # Now immediately spend the output to create a 1-input, 1-output
+    # zero-priority transaction:
+    inputs = [ { "txid" : self_txid, "vout" : vout } ]
+    outputs = { to_node.getnewaddress() : float(amount) }
+
+    rawtx = from_node.createrawtransaction(inputs, outputs)
+    signresult = from_node.signrawtransaction(rawtx)
+    txid = from_node.sendrawtransaction(signresult["hex"], True)
+
+    return (txid, signresult["hex"])
+
+def random_zeropri_transaction(nodes, amount, min_fee, fee_increment, fee_variants):
+    """
+    Create a random zero-priority transaction.
+    Returns (txid, hex-encoded-transaction-data, fee)
+    """
+    from_node = random.choice(nodes)
+    to_node = random.choice(nodes)
+    fee = min_fee + fee_increment*random.randint(0,fee_variants)
+    (txid, txhex) = send_zeropri_transaction(from_node, to_node, amount, fee)
+    return (txid, txhex, fee)
+
+def random_transaction(nodes, amount, min_fee, fee_increment, fee_variants):
+    """
+    Create a random transaction.
+    Returns (txid, hex-encoded-transaction-data, fee)
+    """
+    from_node = random.choice(nodes)
+    to_node = random.choice(nodes)
+    fee = min_fee + fee_increment*random.randint(0,fee_variants)
+
+    (total_in, inputs) = gather_inputs(from_node, amount+fee)
+    outputs = make_change(from_node, total_in, amount, fee)
+    outputs[to_node.getnewaddress()] = float(amount)
+
+    rawtx = from_node.createrawtransaction(inputs, outputs)
+    signresult = from_node.signrawtransaction(rawtx)
+    txid = from_node.sendrawtransaction(signresult["hex"], True)
+
+    return (txid, signresult["hex"], fee)
+
+def assert_equal(thing1, thing2):
+    if thing1 != thing2:
+        raise AssertionError("%s != %s"%(str(thing1),str(thing2)))
+
+def assert_greater_than(thing1, thing2):
+    if thing1 <= thing2:
+        raise AssertionError("%s <= %s"%(str(thing1),str(thing2)))
+
+def assert_raises(exc, fun, *args, **kwds):
+    try:
+        fun(*args, **kwds)
+    except exc:
+        pass
+    except Exception as e:
+        raise AssertionError("Unexpected exception raised: "+type(e).__name__)
+    else:
+        raise AssertionError("No exception raised")
+
+# Returns txid if operation was a success or None
+def wait_and_assert_operationid_status(node, myopid, in_status='success', in_errormsg=None):
+    print('waiting for async operation {}'.format(myopid))
+    opids = []
+    opids.append(myopid)
+    timeout = 300
+    status = None
+    errormsg = None
+    txid = None
+    for x in xrange(1, timeout):
+        results = node.z_getoperationresult(opids)
+        if len(results)==0:
+            time.sleep(1)
+        else:
+            status = results[0]["status"]
+            if status == "failed":
+                errormsg = results[0]['error']['message']
+            elif status == "success":
+                txid = results[0]['result']['txid']
+            break
+    assert_equal(in_status, status)
+    if errormsg is not None:
+        assert(in_errormsg is not None)
+        assert_equal(in_errormsg in errormsg, True)
+    if os.getenv("PYTHON_DEBUG", ""):
+        print('...returned status: {}'.format(status))
+        if errormsg is not None:
+            print('...returned error: {}'.format(errormsg))
+    return txid
