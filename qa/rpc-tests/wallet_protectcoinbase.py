@@ -280,4 +280,93 @@ class WalletProtectCoinbaseTest (BitcoinTestFramework):
         print("...invoked getnewaddress() {} times in {} seconds".format(num_t_recipients, elapsed))
 
         # Issue #2263 Workaround START
-        # HTTP connection to node 0 may fall into a state, during the few min
+        # HTTP connection to node 0 may fall into a state, during the few minutes it takes to process
+        # loop above to create new addresses, that when z_sendmany is called with a large amount of
+        # rpc data in recipients, the connection fails with a 'broken pipe' error.  Making a RPC call
+        # to node 0 before calling z_sendmany appears to fix this issue, perhaps putting the HTTP
+        # connection into a good state to handle a large amount of data in recipients.
+        self.nodes[0].getinfo()
+        # Issue #2263 Workaround END
+
+        myopid = self.nodes[0].z_sendmany(myzaddr, recipients)
+        try:
+            wait_and_assert_operationid_status(self.nodes[0], myopid)
+        except JSONRPCException as e:
+            print("JSONRPC error: "+e.error['message'])
+            assert(False)
+        except Exception as e:
+            print("Unexpected exception caught during testing: "+str(sys.exc_info()[0]))
+            assert(False)
+
+        self.sync_all()
+        self.nodes[1].generate(1)
+        self.sync_all()
+
+        # check balance
+        node2balance = amount_per_recipient * num_t_recipients
+        sproutvalue -= node2balance + Decimal('0.0001')
+        assert_equal(self.nodes[2].getbalance(), node2balance)
+        check_value_pool(self.nodes[0], 'sprout', sproutvalue)
+
+        # Send will fail because fee is negative
+        try:
+            self.nodes[0].z_sendmany(myzaddr, recipients, 1, -1)
+        except JSONRPCException,e:
+            errorString = e.error['message']
+        assert_equal("Amount out of range" in errorString, True)
+
+        # Send will fail because fee is larger than MAX_MONEY
+        try:
+            self.nodes[0].z_sendmany(myzaddr, recipients, 1, Decimal('21000000.00000001'))
+        except JSONRPCException,e:
+            errorString = e.error['message']
+        assert_equal("Amount out of range" in errorString, True)
+
+        # Send will fail because fee is larger than sum of outputs
+        try:
+            self.nodes[0].z_sendmany(myzaddr, recipients, 1, (amount_per_recipient * num_t_recipients) + Decimal('0.00000001'))
+        except JSONRPCException,e:
+            errorString = e.error['message']
+        assert_equal("is greater than the sum of outputs" in errorString, True)
+
+        # Send will succeed because the balance of non-coinbase utxos is 10.0
+        try:
+            self.nodes[0].sendtoaddress(self.nodes[2].getnewaddress(), 9)
+        except JSONRPCException:
+            assert(False)
+
+        self.sync_all()
+        self.nodes[1].generate(1)
+        self.sync_all()
+
+        # check balance
+        node2balance = node2balance + 9
+        assert_equal(self.nodes[2].getbalance(), node2balance)
+
+        # Check that chained joinsplits in a single tx are created successfully.
+        recipients = []
+        num_recipients = 3
+        amount_per_recipient = Decimal('0.002')
+        minconf = 1
+        send_amount = num_recipients * amount_per_recipient
+        custom_fee = Decimal('0.00012345')
+        zbalance = self.nodes[0].z_getbalance(myzaddr)
+        for i in xrange(0,num_recipients):
+            newzaddr = self.nodes[2].z_getnewaddress()
+            recipients.append({"address":newzaddr, "amount":amount_per_recipient})
+        myopid = self.nodes[0].z_sendmany(myzaddr, recipients, minconf, custom_fee)
+        wait_and_assert_operationid_status(self.nodes[0], myopid)
+        self.sync_all()
+        self.nodes[1].generate(1)
+        self.sync_all()
+
+        # check balances
+        resp = self.nodes[2].z_gettotalbalance()
+        assert_equal(Decimal(resp["private"]), send_amount)
+        resp = self.nodes[0].z_getbalance(myzaddr)
+        assert_equal(Decimal(resp), zbalance - custom_fee - send_amount)
+        sproutvalue -= custom_fee
+        check_value_pool(self.nodes[0], 'sprout', sproutvalue)
+
+if __name__ == '__main__':
+    WalletProtectCoinbaseTest().main()
