@@ -231,4 +231,154 @@ proccheck() {
   if cat $1/status 2> /dev/null | grep -q 'PaX:'; then
     pageexec=( $(cat $1/status 2> /dev/null | grep 'PaX:' | cut -b6) )
     segmexec=( $(cat $1/status 2> /dev/null | grep 'PaX:' | cut -b10) )
-    mprotect=( $(cat $1/status 2> /dev/null | grep 'PaX:' | cut
+    mprotect=( $(cat $1/status 2> /dev/null | grep 'PaX:' | cut -b8) )
+    randmmap=( $(cat $1/status 2> /dev/null | grep 'PaX:' | cut -b9) )
+    if [[ "$pageexec" = "P" || "$segmexec" = "S" ]] && [[ "$mprotect" = "M" && "$randmmap" = "R" ]] ; then
+      echo -n -e '\033[32mPaX enabled\033[m   '
+    elif [[ "$pageexec" = "p" && "$segmexec" = "s" && "$randmmap" = "R" ]] ; then
+      echo -n -e '\033[33mPaX ASLR only\033[m '
+    elif [[ "$pageexec" = "P" || "$segmexec" = "S" ]] && [[ "$mprotect" = "m" && "$randmmap" = "R" ]] ; then
+      echo -n -e '\033[33mPaX mprot off \033[m'
+    elif [[ "$pageexec" = "P" || "$segmexec" = "S" ]] && [[ "$mprotect" = "M" && "$randmmap" = "r" ]] ; then
+      echo -n -e '\033[33mPaX ASLR off\033[m  '
+    elif [[ "$pageexec" = "P" || "$segmexec" = "S" ]] && [[ "$mprotect" = "m" && "$randmmap" = "r" ]] ; then
+      echo -n -e '\033[33mPaX NX only\033[m   '
+    else
+      echo -n -e '\033[31mPaX disabled\033[m  '
+    fi
+  # fallback check for NX support
+  elif readelf -W -l $1/exe 2>/dev/null | grep 'GNU_STACK' | grep -q 'RWE'; then
+    echo -n -e '\033[31mNX disabled\033[m   '
+  else
+    echo -n -e '\033[32mNX enabled \033[m   '
+  fi 
+
+  # check for PIE support
+  if readelf -h $1/exe 2>/dev/null | grep -q 'Type:[[:space:]]*EXEC'; then
+    echo -n -e '\033[31mNo PIE               \033[m   '
+  elif readelf -h $1/exe 2>/dev/null | grep -q 'Type:[[:space:]]*DYN'; then
+    if readelf -d $1/exe 2>/dev/null | grep -q '(DEBUG)'; then
+      echo -n -e '\033[32mPIE enabled          \033[m   '
+    else   
+      echo -n -e '\033[33mDynamic Shared Object\033[m   '
+    fi
+  else
+    echo -n -e '\033[33mNot an ELF file      \033[m   '
+  fi
+}
+
+# check mapped libraries
+libcheck() {
+  libs=( $(awk '{ print $6 }' /proc/$1/maps | grep '/' | sort -u | xargs file | grep ELF | awk '{ print $1 }' | sed 's/:/ /') )
+ 
+  printf "\n* Loaded libraries (file information, # of mapped files: ${#libs[@]}):\n\n"
+  
+  for element in $(seq 0 $((${#libs[@]} - 1)))
+  do
+    echo "  ${libs[$element]}:"
+    echo -n "    "
+    filecheck ${libs[$element]}
+    printf "\n\n"
+  done
+}
+
+# check for system-wide ASLR support
+aslrcheck() {
+  # PaX ASLR support
+  if !(cat /proc/1/status 2> /dev/null | grep -q 'Name:') ; then
+    echo -n -e ':\033[33m insufficient privileges for PaX ASLR checks\033[m\n'
+    echo -n -e '  Fallback to standard Linux ASLR check'
+  fi
+  
+  if cat /proc/1/status 2> /dev/null | grep -q 'PaX:'; then
+    printf ": "
+    if cat /proc/1/status 2> /dev/null | grep 'PaX:' | grep -q 'R'; then
+      echo -n -e '\033[32mPaX ASLR enabled\033[m\n\n'
+    else
+      echo -n -e '\033[31mPaX ASLR disabled\033[m\n\n'
+    fi
+  else
+    # standard Linux 'kernel.randomize_va_space' ASLR support
+    # (see the kernel file 'Documentation/sysctl/kernel.txt' for a detailed description)
+    printf " (kernel.randomize_va_space): "
+    if /sbin/sysctl -a 2>/dev/null | grep -q 'kernel.randomize_va_space = 1'; then
+      echo -n -e '\033[33mOn (Setting: 1)\033[m\n\n'
+      printf "  Description - Make the addresses of mmap base, stack and VDSO page randomized.\n"
+      printf "  This, among other things, implies that shared libraries will be loaded to \n"
+      printf "  random addresses. Also for PIE-linked binaries, the location of code start\n"
+      printf "  is randomized. Heap addresses are *not* randomized.\n\n"
+    elif /sbin/sysctl -a 2>/dev/null | grep -q 'kernel.randomize_va_space = 2'; then
+      echo -n -e '\033[32mOn (Setting: 2)\033[m\n\n'
+      printf "  Description - Make the addresses of mmap base, heap, stack and VDSO page randomized.\n"
+      printf "  This, among other things, implies that shared libraries will be loaded to random \n"
+      printf "  addresses. Also for PIE-linked binaries, the location of code start is randomized.\n\n"
+    elif /sbin/sysctl -a 2>/dev/null | grep -q 'kernel.randomize_va_space = 0'; then
+      echo -n -e '\033[31mOff (Setting: 0)\033[m\n'
+    else
+      echo -n -e '\033[31mNot supported\033[m\n'
+    fi
+    printf "  See the kernel file 'Documentation/sysctl/kernel.txt' for more details.\n\n"
+  fi 
+}
+
+# check cpu nx flag
+nxcheck() {
+  if grep -q nx /proc/cpuinfo; then
+    echo -n -e '\033[32mYes\033[m\n\n'
+  else
+    echo -n -e '\033[31mNo\033[m\n\n'
+  fi
+}
+
+# check for kernel protection mechanisms
+kernelcheck() {
+  printf "  Description - List the status of kernel protection mechanisms. Rather than\n"
+  printf "  inspect kernel mechanisms that may aid in the prevention of exploitation of\n"
+  printf "  userspace processes, this option lists the status of kernel configuration\n"
+  printf "  options that harden the kernel itself against attack.\n\n"
+  printf "  Kernel config: "
+ 
+  if [ -f /proc/config.gz ] ; then
+    kconfig="zcat /proc/config.gz"
+    printf "\033[32m/proc/config.gz\033[m\n\n"
+  elif [ -f /boot/config-`uname -r` ] ; then
+    kconfig="cat /boot/config-`uname -r`"
+    printf "\033[33m/boot/config-`uname -r`\033[m\n\n"
+    printf "  Warning: The config on disk may not represent running kernel config!\n\n";
+  elif [ -f "${KBUILD_OUTPUT:-/usr/src/linux}"/.config ] ; then
+    kconfig="cat ${KBUILD_OUTPUT:-/usr/src/linux}/.config"
+    printf "\033[33m%s\033[m\n\n" "${KBUILD_OUTPUT:-/usr/src/linux}/.config"
+    printf "  Warning: The config on disk may not represent running kernel config!\n\n";
+  else
+    printf "\033[31mNOT FOUND\033[m\n\n"
+    exit 0
+  fi
+
+  printf "  GCC stack protector support:            "
+  if $kconfig | grep -qi 'CONFIG_CC_STACKPROTECTOR=y'; then
+    printf "\033[32mEnabled\033[m\n"
+  else
+    printf "\033[31mDisabled\033[m\n"
+  fi
+
+  printf "  Strict user copy checks:                "
+  if $kconfig | grep -qi 'CONFIG_DEBUG_STRICT_USER_COPY_CHECKS=y'; then
+    printf "\033[32mEnabled\033[m\n"
+  else
+    printf "\033[31mDisabled\033[m\n"
+  fi
+
+  printf "  Enforce read-only kernel data:          "
+  if $kconfig | grep -qi 'CONFIG_DEBUG_RODATA=y'; then
+    printf "\033[32mEnabled\033[m\n"
+  else
+    printf "\033[31mDisabled\033[m\n"
+  fi
+  printf "  Restrict /dev/mem access:               "
+  if $kconfig | grep -qi 'CONFIG_STRICT_DEVMEM=y'; then
+    printf "\033[32mEnabled\033[m\n"
+  else
+    printf "\033[31mDisabled\033[m\n"
+  fi
+
+  printf "  Restrict /dev/km
