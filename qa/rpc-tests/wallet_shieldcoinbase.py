@@ -180,4 +180,21 @@ class WalletShieldCoinbaseTest (BitcoinTestFramework):
         self.nodes[0].generate(200)
         self.sync_all()
         mytaddr = self.nodes[0].getnewaddress()
-        result = self.nodes[0].z_shie
+        result = self.nodes[0].z_shieldcoinbase(mytaddr, myzaddr, Decimal('0.0001'))
+        assert_equal(result["shieldingUTXOs"], Decimal('50'))
+        assert_equal(result["remainingUTXOs"], Decimal('50'))
+        wait_and_assert_operationid_status(self.nodes[0], result['opid'])
+
+        # Verify maximum number of utxos which node 0 can shield can be set by the limit parameter
+        result = self.nodes[0].z_shieldcoinbase(mytaddr, myzaddr, Decimal('0.0001'), 33)
+        assert_equal(result["shieldingUTXOs"], Decimal('33'))
+        assert_equal(result["remainingUTXOs"], Decimal('17'))
+        wait_and_assert_operationid_status(self.nodes[0], result['opid'])
+        # Don't sync node 2 which rejects the tx due to its mempooltxinputlimit
+        sync_blocks(self.nodes[:2])
+        sync_mempools(self.nodes[:2])
+        self.nodes[1].generate(1)
+        self.sync_all()
+
+if __name__ == '__main__':
+    WalletShieldCoinbaseTest().main()
