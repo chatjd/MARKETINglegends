@@ -589,4 +589,237 @@ case "$1" in
     if [ "$N" != "[A-Za-z]*" ]; then
       # read permissions?
       if [ ! -r $N ]; then
-        printf "\033[31mError: No read permissions 
+        printf "\033[31mError: No read permissions for '$tempdir/$N' (run as root).\033[m\n"
+      else
+        # ELF executable?
+        out=`file $N`
+        if [[ ! $out =~ ELF ]] ; then
+           if [ "$verbose" = "true" ] ; then
+             printf "\033[34m*** Not an ELF file: $tempdir/"
+             file $N
+             printf "\033[m"
+           fi
+        else 
+          filecheck $N
+          if [ `find $tempdir/$N \( -perm -004000 -o -perm -002000 \) -type f -print` ]; then
+            printf "\033[37;41m%s%s\033[m" $2 $N
+          else
+            printf "%s%s" $tempdir/ $N
+          fi
+          echo
+        fi
+      fi
+    fi
+  done
+  exit 0
+  ;;
+ 
+ --file)
+  if [ $have_readelf -eq 0 ] ; then
+    exit 1
+  fi
+  if [ -z "$2" ] ; then
+    printf "\033[31mError: Please provide a valid file.\033[m\n\n"
+   exit 1
+  fi
+  # does the file exist?
+  if [ ! -e $2 ] ; then
+    printf "\033[31mError: The file '$2' does not exist.\033[m\n\n"
+    exit 1
+  fi
+  # read permissions?
+  if [ ! -r $2 ] ; then
+    printf "\033[31mError: No read permissions for '$2' (run as root).\033[m\n\n"
+    exit 1
+  fi
+  # ELF executable?
+  out=`file $2`
+  if [[ ! $out =~ ELF ]] ; then
+    printf "\033[31mError: Not an ELF file: "
+    file $2
+    printf "\033[m\n"
+    exit 1
+  fi
+  printf "RELRO           STACK CANARY      NX            PIE             RPATH      RUNPATH      FILE\n"
+  filecheck $2
+  if [ `find $2 \( -perm -004000 -o -perm -002000 \) -type f -print` ] ; then
+    printf "\033[37;41m%s%s\033[m" $2 $N
+  else
+    printf "%s" $2
+  fi
+  echo
+  exit 0
+  ;;
+
+ --proc-all)
+  if [ $have_readelf -eq 0 ] ; then
+    exit 1
+  fi
+  cd /proc
+  printf "* System-wide ASLR"
+  aslrcheck
+  printf "* Does the CPU support NX: "
+  nxcheck 
+  printf "         COMMAND    PID RELRO             STACK CANARY           NX/PaX        PIE\n"
+  for N in [1-9]*; do
+    if [ $N != $$ ] && readlink -q $N/exe > /dev/null; then
+      printf "%16s" `head -1 $N/status | cut -b 7-`
+      printf "%7d " $N
+      proccheck $N
+      echo
+    fi
+  done
+  if [ ! -e /usr/bin/id ] ; then
+    printf "\n\033[33mNote: If you are running 'checksec.sh' as an unprivileged user, you\n"
+    printf "      will not see all processes. Please run the script as root.\033[m\n\n"
+  else 
+    if !(root_privs) ; then
+      printf "\n\033[33mNote: You are running 'checksec.sh' as an unprivileged user.\n" 
+      printf "      Too see all processes, please run the script as root.\033[m\n\n"
+    fi
+  fi
+  exit 0
+  ;;
+
+ --proc)
+  if [ $have_readelf -eq 0 ] ; then
+    exit 1
+  fi
+  if [ -z "$2" ] ; then
+    printf "\033[31mError: Please provide a valid process name.\033[m\n\n"
+    exit 1
+  fi
+  if !(isString "$2") ; then
+     printf "\033[31mError: Please provide a valid process name.\033[m\n\n"
+     exit 1
+  fi
+  cd /proc
+  printf "* System-wide ASLR"
+  aslrcheck
+  printf "* Does the CPU support NX: "
+  nxcheck
+  printf "         COMMAND    PID RELRO             STACK CANARY           NX/PaX        PIE\n"
+  for N in `ps -Ao pid,comm | grep $2 | cut -b1-6`; do
+    if [ -d $N ] ; then
+      printf "%16s" `head -1 $N/status | cut -b 7-`
+      printf "%7d " $N
+      # read permissions?
+      if [ ! -r $N/exe ] ; then
+        if !(root_privs) ; then
+          printf "\033[31mNo read permissions for '/proc/$N/exe' (run as root).\033[m\n\n"
+          exit 1
+        fi
+        if [ ! `readlink $N/exe` ] ; then
+          printf "\033[31mPermission denied. Requested process ID belongs to a kernel thread.\033[m\n\n"
+          exit 1
+        fi
+        exit 1
+      fi
+      proccheck $N
+      echo
+    fi
+  done
+  exit 0
+  ;;
+
+ --proc-libs)
+  if [ $have_readelf -eq 0 ] ; then
+    exit 1
+  fi
+  if [ -z "$2" ] ; then
+    printf "\033[31mError: Please provide a valid process ID.\033[m\n\n"
+    exit 1
+  fi
+  if !(isNumeric "$2") ; then
+     printf "\033[31mError: Please provide a valid process ID.\033[m\n\n"
+     exit 1
+  fi
+  cd /proc
+  printf "* System-wide ASLR"
+  aslrcheck
+  printf "* Does the CPU support NX: "
+  nxcheck
+  printf "* Process information:\n\n"
+  printf "         COMMAND    PID RELRO             STACK CANARY           NX/PaX        PIE\n"
+  N=$2
+  if [ -d $N ] ; then
+    printf "%16s" `head -1 $N/status | cut -b 7-`
+    printf "%7d " $N
+    # read permissions?
+    if [ ! -r $N/exe ] ; then
+      if !(root_privs) ; then
+        printf "\033[31mNo read permissions for '/proc/$N/exe' (run as root).\033[m\n\n"
+        exit 1
+      fi
+      if [ ! `readlink $N/exe` ] ; then
+        printf "\033[31mPermission denied. Requested process ID belongs to a kernel thread.\033[m\n\n"
+        exit 1
+      fi
+      exit 1
+    fi
+    proccheck $N
+    echo
+    libcheck $N
+  fi
+  exit 0
+  ;;
+
+ --kernel)
+  cd /proc
+  printf "* Kernel protection information:\n\n"
+  kernelcheck
+  exit 0
+  ;;
+
+ --fortify-file)
+  if [ $have_readelf -eq 0 ] ; then
+    exit 1
+  fi
+  if [ -z "$2" ] ; then
+    printf "\033[31mError: Please provide a valid file.\033[m\n\n"
+   exit 1
+  fi
+  # does the file exist?
+  if [ ! -e $2 ] ; then
+    printf "\033[31mError: The file '$2' does not exist.\033[m\n\n"
+    exit 1
+  fi
+  # read permissions?
+  if [ ! -r $2 ] ; then
+    printf "\033[31mError: No read permissions for '$2' (run as root).\033[m\n\n"
+    exit 1
+  fi
+  # ELF executable?
+  out=`file $2`
+  if [[ ! $out =~ ELF ]] ; then
+    printf "\033[31mError: Not an ELF file: "
+    file $2
+    printf "\033[m\n"
+    exit 1
+  fi
+  if [ -e /lib/libc.so.6 ] ; then
+    FS_libc=/lib/libc.so.6
+  elif [ -e /lib64/libc.so.6 ] ; then
+    FS_libc=/lib64/libc.so.6
+  elif [ -e /lib/i386-linux-gnu/libc.so.6 ] ; then
+    FS_libc=/lib/i386-linux-gnu/libc.so.6
+  elif [ -e /lib/x86_64-linux-gnu/libc.so.6 ] ; then
+    FS_libc=/lib/x86_64-linux-gnu/libc.so.6
+  else
+    printf "\033[31mError: libc not found.\033[m\n\n"
+    exit 1
+  fi
+
+  FS_chk_func_libc=( $(readelf -s $FS_libc | grep _chk@@ | awk '{ print $8 }' | cut -c 3- | sed -e 's/_chk@.*//') )
+  FS_functions=( $(readelf -s $2 | awk '{ print $8 }' | sed 's/_*//' | sed -e 's/@.*//') )
+
+  FS_libc_check
+  FS_binary_check
+  FS_comparison
+  FS_summary
+
+  exit 0
+  ;;
+
+ --fortify-proc)
+  if [ $have_
