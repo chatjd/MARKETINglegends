@@ -381,4 +381,212 @@ kernelcheck() {
     printf "\033[31mDisabled\033[m\n"
   fi
 
-  printf "  Restrict /dev/km
+  printf "  Restrict /dev/kmem access:              "
+  if $kconfig | grep -qi 'CONFIG_DEVKMEM=y'; then
+    printf "\033[31mDisabled\033[m\n"
+  else
+    printf "\033[32mEnabled\033[m\n"
+  fi
+
+  printf "\n"
+  printf "* grsecurity / PaX: "
+
+  if $kconfig | grep -qi 'CONFIG_GRKERNSEC=y'; then
+    if $kconfig | grep -qi 'CONFIG_GRKERNSEC_HIGH=y'; then
+      printf "\033[32mHigh GRKERNSEC\033[m\n\n"
+    elif $kconfig | grep -qi 'CONFIG_GRKERNSEC_MEDIUM=y'; then
+      printf "\033[33mMedium GRKERNSEC\033[m\n\n"
+    elif $kconfig | grep -qi 'CONFIG_GRKERNSEC_LOW=y'; then
+      printf "\033[31mLow GRKERNSEC\033[m\n\n"
+    else
+      printf "\033[33mCustom GRKERNSEC\033[m\n\n"
+    fi
+
+    printf "  Non-executable kernel pages:            "
+    if $kconfig | grep -qi 'CONFIG_PAX_KERNEXEC=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+
+    printf "  Prevent userspace pointer deref:        "
+    if $kconfig | grep -qi 'CONFIG_PAX_MEMORY_UDEREF=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+
+    printf "  Prevent kobject refcount overflow:      "
+    if $kconfig | grep -qi 'CONFIG_PAX_REFCOUNT=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+
+    printf "  Bounds check heap object copies:        "
+    if $kconfig | grep -qi 'CONFIG_PAX_USERCOPY=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+
+    printf "  Disable writing to kmem/mem/port:       "
+    if $kconfig | grep -qi 'CONFIG_GRKERNSEC_KMEM=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+
+    printf "  Disable privileged I/O:                 "
+    if $kconfig | grep -qi 'CONFIG_GRKERNSEC_IO=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+
+    printf "  Harden module auto-loading:             "
+    if $kconfig | grep -qi 'CONFIG_GRKERNSEC_MODHARDEN=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+
+    printf "  Hide kernel symbols:                    "
+    if $kconfig | grep -qi 'CONFIG_GRKERNSEC_HIDESYM=y'; then
+      printf "\033[32mEnabled\033[m\n"
+    else
+      printf "\033[31mDisabled\033[m\n"
+    fi
+  else
+    printf "\033[31mNo GRKERNSEC\033[m\n\n"
+    printf "  The grsecurity / PaX patchset is available here:\n"
+    printf "    http://grsecurity.net/\n"
+  fi
+
+  printf "\n"
+  printf "* Kernel Heap Hardening: "
+
+  if $kconfig | grep -qi 'CONFIG_KERNHEAP=y'; then
+    if $kconfig | grep -qi 'CONFIG_KERNHEAP_FULLPOISON=y'; then
+      printf "\033[32mFull KERNHEAP\033[m\n\n"
+    else
+      printf "\033[33mPartial KERNHEAP\033[m\n\n"
+    fi
+  else
+    printf "\033[31mNo KERNHEAP\033[m\n\n"
+    printf "  The KERNHEAP hardening patchset is available here:\n"
+    printf "    https://www.subreption.com/kernheap/\n\n"
+  fi
+}
+
+# --- FORTIFY_SOURCE subfunctions (start) ---
+
+# is FORTIFY_SOURCE supported by libc?
+FS_libc_check() {
+  printf "* FORTIFY_SOURCE support available (libc)    : "
+
+  if [ "${#FS_chk_func_libc[@]}" != "0" ] ; then
+    printf "\033[32mYes\033[m\n"
+  else
+    printf "\033[31mNo\033[m\n"
+    exit 1
+  fi
+}
+
+# was the binary compiled with FORTIFY_SOURCE?
+FS_binary_check() {
+  printf "* Binary compiled with FORTIFY_SOURCE support: "
+
+  for FS_elem_functions in $(seq 0 $((${#FS_functions[@]} - 1)))
+  do
+    if [[ ${FS_functions[$FS_elem_functions]} =~ _chk ]] ; then
+      printf "\033[32mYes\033[m\n"
+      return
+    fi
+  done
+  printf "\033[31mNo\033[m\n"
+  exit 1
+}
+
+FS_comparison() {
+  echo
+  printf " ------ EXECUTABLE-FILE ------- . -------- LIBC --------\n"
+  printf " FORTIFY-able library functions | Checked function names\n"
+  printf " -------------------------------------------------------\n"
+
+  for FS_elem_libc in $(seq 0 $((${#FS_chk_func_libc[@]} - 1)))
+  do
+    for FS_elem_functions in $(seq 0 $((${#FS_functions[@]} - 1)))
+    do
+      FS_tmp_func=${FS_functions[$FS_elem_functions]}
+      FS_tmp_libc=${FS_chk_func_libc[$FS_elem_libc]}
+
+      if [[ $FS_tmp_func =~ ^$FS_tmp_libc$ ]] ; then
+        printf " \033[31m%-30s\033[m | __%s%s\n" $FS_tmp_func $FS_tmp_libc $FS_end
+        let FS_cnt_total++
+        let FS_cnt_unchecked++
+      elif [[ $FS_tmp_func =~ ^$FS_tmp_libc(_chk) ]] ; then
+        printf " \033[32m%-30s\033[m | __%s%s\n" $FS_tmp_func $FS_tmp_libc $FS_end
+        let FS_cnt_total++
+        let FS_cnt_checked++
+      fi
+
+    done
+  done
+}
+
+FS_summary() {
+  echo
+  printf "SUMMARY:\n\n"
+  printf "* Number of checked functions in libc                : ${#FS_chk_func_libc[@]}\n"
+  printf "* Total number of library functions in the executable: ${#FS_functions[@]}\n"
+  printf "* Number of FORTIFY-able functions in the executable : %s\n" $FS_cnt_total
+  printf "* Number of checked functions in the executable      : \033[32m%s\033[m\n" $FS_cnt_checked
+  printf "* Number of unchecked functions in the executable    : \033[31m%s\033[m\n" $FS_cnt_unchecked
+  echo
+}
+
+# --- FORTIFY_SOURCE subfunctions (end) ---
+
+if !(command_exists readelf) ; then
+  printf "\033[31mWarning: 'readelf' not found! It's required for most checks.\033[m\n\n"
+  have_readelf=0
+fi
+
+# parse command-line arguments
+case "$1" in
+
+ --version)
+  version
+  exit 0
+  ;;
+
+ --help)
+  help
+  exit 0
+  ;;
+
+ --dir)
+  if [ "$3" = "-v" ] ; then
+    verbose=true
+  fi
+  if [ $have_readelf -eq 0 ] ; then
+    exit 1
+  fi
+  if [ -z "$2" ] ; then
+    printf "\033[31mError: Please provide a valid directory.\033[m\n\n"
+    exit 1
+  fi
+  # remove trailing slashes
+  tempdir=`echo $2 | sed -e "s/\/*$//"`
+  if [ ! -d $tempdir ] ; then
+    printf "\033[31mError: The directory '$tempdir' does not exist.\033[m\n\n"
+    exit 1
+  fi
+  cd $tempdir
+  printf "RELRO           STACK CANARY      NX            PIE             RPATH      RUNPATH      FILE\n"
+  for N in [A-Za-z]*; do
+    if [ "$N" != "[A-Za-z]*" ]; then
+      # read permissions?
+      if [ ! -r $N ]; then
+        printf "\033[31mError: No read permissions 
