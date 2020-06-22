@@ -822,4 +822,61 @@ case "$1" in
   ;;
 
  --fortify-proc)
-  if [ $have_
+  if [ $have_readelf -eq 0 ] ; then
+    exit 1
+  fi
+  if [ -z "$2" ] ; then
+    printf "\033[31mError: Please provide a valid process ID.\033[m\n\n"
+    exit 1
+  fi
+  if !(isNumeric "$2") ; then
+     printf "\033[31mError: Please provide a valid process ID.\033[m\n\n"
+     exit 1
+  fi
+  cd /proc
+  N=$2
+  if [ -d $N ] ; then
+    # read permissions?
+    if [ ! -r $N/exe ] ; then
+      if !(root_privs) ; then
+        printf "\033[31mNo read permissions for '/proc/$N/exe' (run as root).\033[m\n\n"
+        exit 1
+      fi
+      if [ ! `readlink $N/exe` ] ; then
+        printf "\033[31mPermission denied. Requested process ID belongs to a kernel thread.\033[m\n\n"
+        exit 1
+      fi
+      exit 1
+    fi
+    if [ -e /lib/libc.so.6 ] ; then
+      FS_libc=/lib/libc.so.6
+    elif [ -e /lib64/libc.so.6 ] ; then
+      FS_libc=/lib64/libc.so.6
+    elif [ -e /lib/i386-linux-gnu/libc.so.6 ] ; then
+      FS_libc=/lib/i386-linux-gnu/libc.so.6
+    elif [ -e /lib/x86_64-linux-gnu/libc.so.6 ] ; then
+      FS_libc=/lib/x86_64-linux-gnu/libc.so.6
+    else
+      printf "\033[31mError: libc not found.\033[m\n\n"
+      exit 1
+    fi
+    printf "* Process name (PID)                         : %s (%d)\n" `head -1 $N/status | cut -b 7-` $N
+    FS_chk_func_libc=( $(readelf -s $FS_libc | grep _chk@@ | awk '{ print $8 }' | cut -c 3- | sed -e 's/_chk@.*//') )
+    FS_functions=( $(readelf -s $2/exe | awk '{ print $8 }' | sed 's/_*//' | sed -e 's/@.*//') )
+
+    FS_libc_check
+    FS_binary_check
+    FS_comparison
+    FS_summary
+  fi
+  exit 0
+  ;;
+
+ *)
+  if [ "$#" != "0" ] ; then
+    printf "\033[31mError: Unknown option '$1'.\033[m\n\n"
+  fi
+  help
+  exit 1
+  ;;
+esac
