@@ -161,4 +161,103 @@ def create_benchmark_archive(blk_hash):
 
     os.mkdir('benchmark')
     with open('benchmark/block-%d.dat' % blk['height'], 'wb') as f:
-        f.write(binascii.unhexlify(subprocess.check_output([VIDULUM_CLI, 'getblock', blk_hash, 'false']).strip(
+        f.write(binascii.unhexlify(subprocess.check_output([VIDULUM_CLI, 'getblock', blk_hash, 'false']).strip()))
+
+    txs = [json.loads(subprocess.check_output([VIDULUM_CLI, 'getrawtransaction', tx, '1'])
+                     ) for tx in blk['tx']]
+
+    js_txs = len([tx for tx in txs if len(tx['vjoinsplit']) > 0])
+    if js_txs:
+        print 'Block contains %d JoinSplit-containing transactions' % js_txs
+        return
+
+    inputs = [(x['txid'], x['vout']) for tx in txs for x in tx['vin'] if x.has_key('txid')]
+    print 'Total inputs: %d' % len(inputs)
+
+    unique_inputs = {}
+    for i in sorted(inputs):
+        if unique_inputs.has_key(i[0]):
+            unique_inputs[i[0]].append(i[1])
+        else:
+            unique_inputs[i[0]] = [i[1]]
+    print 'Unique input transactions: %d' % len(unique_inputs)
+
+    db_path = 'benchmark/block-%d-inputs' % blk['height']
+    db = plyvel.DB(db_path, create_if_missing=True)
+    wb = db.write_batch()
+    bar = progressbar.ProgressBar(redirect_stdout=True)
+    print 'Collecting input coins for block'
+    for tx in bar(unique_inputs.keys()):
+        rawtx = json.loads(subprocess.check_output([VIDULUM_CLI, 'getrawtransaction', tx, '1']))
+
+        mask_size = 0
+        mask_code = 0
+        b = 0
+        while 2+b*8 < len(rawtx['vout']):
+            zero = True
+            i = 0
+            while i < 8 and 2+b*8+i < len(rawtx['vout']):
+                if 2+b*8+i in unique_inputs[tx]:
+                    zero = False
+                i += 1
+            if not zero:
+                mask_size = b + 1
+                mask_code += 1
+            b += 1
+
+        coinbase = len(rawtx['vin']) == 1 and 'coinbase' in rawtx['vin'][0]
+        first = len(rawtx['vout']) > 0 and 0 in unique_inputs[tx]
+        second = len(rawtx['vout']) > 1 and 1 in unique_inputs[tx]
+        code = 8*(mask_code - (0 if first or second else 1)) + \
+            (1 if coinbase else 0) + \
+            (2 if first else 0) + \
+            (4 if second else 0)
+
+        coins = bytearray()
+        # Serialized format:
+        # - VARINT(nVersion)
+        coins.extend(encode_varint(rawtx['version']))
+        # - VARINT(nCode)
+        coins.extend(encode_varint(code))
+        # - unspentness bitvector, for vout[2] and further; least significant byte first
+        for b in range(mask_size):
+            avail = 0
+            i = 0
+            while i < 8 and 2+b*8+i < len(rawtx['vout']):
+                if 2+b*8+i in unique_inputs[tx]:
+                    avail |= (1 << i)
+                i += 1
+            coins.append(avail)
+        # - the non-spent CTxOuts (via CTxOutCompressor)
+        for i in range(len(rawtx['vout'])):
+            if i in unique_inputs[tx]:
+                coins.extend(encode_varint(compress_amount(int(rawtx['vout'][i]['valueZat']))))
+                coins.extend(compress_script(
+                    binascii.unhexlify(rawtx['vout'][i]['scriptPubKey']['hex'])))
+        # - VARINT(nHeight)
+        coins.extend(encode_varint(json.loads(
+            subprocess.check_output([VIDULUM_CLI, 'getblockheader', rawtx['blockhash']])
+            )['height']))
+
+        db_key = b'c' + bytes(binascii.unhexlify(tx)[::-1])
+        db_val = bytes(coins)
+        wb.put(db_key, db_val)
+
+    wb.write()
+    db.close()
+
+    # Make reproducible archive
+    os.remove('%s/LOG' % db_path)
+    files = subprocess.check_output(['find', 'benchmark']).strip().split('\n')
+    archive_name = 'block-%d.tar' % blk['height']
+    tar = tarfile.open(archive_name, 'w')
+    for name in sorted(files):
+        tar.add(name, recursive=False, filter=deterministic_filter)
+    tar.close()
+    subprocess.check_call(['xz', '-6', archive_name])
+    print 'Created archive %s.xz' % archive_name
+    subprocess.call(['rm', '-r', 'benchmark'])
+
+if __name__ == '__main__':
+    check_deps()
+    create_benchmark_archive('0000000007cdb809e48e51dd0b530e8f5073e0a9e9bd7ae920fe23e874658c74')
