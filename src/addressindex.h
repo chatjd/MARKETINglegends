@@ -68,4 +68,15 @@ struct CMempoolAddressDeltaKeyCompare
                         return a.index < b.index;
                     }
                 } else {
-                    
+                    return a.txhash < b.txhash;
+                }
+            } else {
+                return a.addressBytes < b.addressBytes;
+            }
+        } else {
+            return a.type < b.type;
+        }
+    }
+};
+
+#endif // BITCOIN_ADDRESSINDEX_H
