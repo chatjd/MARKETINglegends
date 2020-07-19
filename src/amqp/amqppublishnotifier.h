@@ -36,4 +36,22 @@ public:
     bool NotifyBlock(const CBlockIndex *pindex);
 };
 
-class AMQP
+class AMQPPublishHashTransactionNotifier : public AMQPAbstractPublishNotifier
+{
+public:
+    bool NotifyTransaction(const CTransaction &transaction);
+};
+
+class AMQPPublishRawBlockNotifier : public AMQPAbstractPublishNotifier
+{
+public:
+    bool NotifyBlock(const CBlockIndex *pindex);
+};
+
+class AMQPPublishRawTransactionNotifier : public AMQPAbstractPublishNotifier
+{
+public:
+    bool NotifyTransaction(const CTransaction &transaction);
+};
+
+#endif // VIDULUM_AMQP_AMQPPUBLISHNOTIFIER_H
