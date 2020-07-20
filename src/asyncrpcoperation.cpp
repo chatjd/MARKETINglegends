@@ -139,4 +139,44 @@ UniValue AsyncRPCOperation::getResult() const {
         return NullUniValue;
     }
 
-    std::lock_guard
+    std::lock_guard<std::mutex> guard(lock_);
+    return this->result_;
+}
+
+
+/**
+ * Returns a status UniValue object.
+ * If the operation has failed, it will include an error object.
+ * If the operation has succeeded, it will include the result value.
+ * If the operation was cancelled, there will be no error object or result value.
+ */
+UniValue AsyncRPCOperation::getStatus() const {
+    OperationStatus status = this->getState();
+    UniValue obj(UniValue::VOBJ);
+    obj.push_back(Pair("id", this->id_));
+    obj.push_back(Pair("status", OperationStatusMap[status]));
+    obj.push_back(Pair("creation_time", this->creation_time_));
+    // TODO: Issue #1354: There may be other useful metadata to return to the user.
+    UniValue err = this->getError();
+    if (!err.isNull()) {
+        obj.push_back(Pair("error", err.get_obj()));
+    }
+    UniValue result = this->getResult();
+    if (!result.isNull()) {
+        obj.push_back(Pair("result", result));
+
+        // Include execution time for successful operation
+        std::chrono::duration<double> elapsed_seconds = end_time_ - start_time_;
+        obj.push_back(Pair("execution_secs", elapsed_seconds.count()));
+
+    }
+    return obj;
+}
+
+/**
+ * Return the operation state in human readable form.
+ */
+std::string AsyncRPCOperation::getStateAsString() const {
+    OperationStatus status = this->getState();
+    return OperationStatusMap[status];
+}
