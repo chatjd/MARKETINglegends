@@ -61,4 +61,131 @@ public:
         SCRIPT_ADDRESS,
         SECRET_KEY,
         EXT_PUBLIC_KEY,
-  
+        EXT_SECRET_KEY,
+
+        ZCPAYMENT_ADDRRESS,
+        ZCSPENDING_KEY,
+        ZCVIEWING_KEY,
+
+        MAX_BASE58_TYPES
+    };
+
+    enum Bech32Type {
+        SAPLING_PAYMENT_ADDRESS,
+        SAPLING_FULL_VIEWING_KEY,
+        SAPLING_INCOMING_VIEWING_KEY,
+        SAPLING_EXTENDED_SPEND_KEY,
+
+        MAX_BECH32_TYPES
+    };
+
+    const Consensus::Params& GetConsensus() const { return consensus; }
+    const CMessageHeader::MessageStartChars& MessageStart() const { return pchMessageStart; }
+    const std::vector<unsigned char>& AlertKey() const { return vAlertPubKey; }
+    int GetDefaultPort() const { return nDefaultPort; }
+
+    int EnforceBlockUpgradeMajority() const { return nEnforceBlockUpgradeMajority; }
+
+    const CBlock& GenesisBlock() const { return genesis; }
+    /** Make miner wait to have peers to avoid wasting work */
+    bool MiningRequiresPeers() const { return fMiningRequiresPeers; }
+    /** Default value for -checkmempool and -checkblockindex argument */
+    bool DefaultConsistencyChecks() const { return fDefaultConsistencyChecks; }
+    /** Policy: Filter transactions that do not match well-defined patterns */
+    bool RequireStandard() const { return fRequireStandard; }
+    int64_t MaxTipAge() const { return nMaxTipAge; }
+    int64_t PruneAfterHeight() const { return nPruneAfterHeight; }
+
+    EHparameters eh_epoch_1_params() const { return eh_epoch_1; }
+    EHparameters eh_epoch_2_params() const { return eh_epoch_2; }
+    // unsigned int eh_epoch_1_end() const { return eh_epoch_1_endtime; }
+    // unsigned int eh_epoch_2_start() const { return eh_epoch_2_starttime; }
+    unsigned int eh_epoch_1_end() const { return eh_epoch_1_endblock; }
+    unsigned int eh_epoch_2_start() const { return eh_epoch_2_startblock; }
+
+    /** The masternode count that we will allow the see-saw reward payments to be off by */
+    int MasternodeCountDrift() const { return nMasternodeCountDrift; }
+    std::string CurrencyUnits() const { return strCurrencyUnits; }
+    uint32_t BIP44CoinType() const { return bip44CoinType; }
+    /** Make miner stop after a block is found. In RPC, don't return until nGenProcLimit blocks are generated */
+    bool MineBlocksOnDemand() const { return fMineBlocksOnDemand; }
+    /** In the future use NetworkIDString() for RPC fields */
+    bool TestnetToBeDeprecatedFieldRPC() const { return fTestnetToBeDeprecatedFieldRPC; }
+    /** Return the BIP70 network string (main, test or regtest) */
+    std::string NetworkIDString() const { return strNetworkID; }
+    const std::vector<CDNSSeedData>& DNSSeeds() const { return vSeeds; }
+    const std::vector<unsigned char>& Base58Prefix(Base58Type type) const { return base58Prefixes[type]; }
+    const std::string& Bech32HRP(Bech32Type type) const { return bech32HRPs[type]; }
+    const std::vector<SeedSpec6>& FixedSeeds() const { return vFixedSeeds; }
+    const CCheckpointData& Checkpoints() const { return checkpointData; }
+    int PoolMaxTransactions() const { return nPoolMaxTransactions; }
+    /** Return the Vidulum Rewards System address and script for a given block height */
+    std::string SporkKey() const { return strSporkKey; }
+    std::string ObfuscationPoolDummyAddress() const { return strObfuscationPoolDummyAddress; }
+    /** Headers first syncing is disabled */
+    bool HeadersFirstSyncingActive() const { return fHeadersFirstSyncingActive; };
+    int64_t StartMasternodePayments() const { return nStartMasternodePayments; }
+    int64_t Budget_Fee_Confirmations() const { return nBudget_Fee_Confirmations; }
+    std::string GetVRewardSystemAddressAtHeight(int height) const;
+    CScript GetVRewardSystemScriptAtHeight(int height) const;
+    std::string GetVRewardSystemAddressAtIndex(int i) const;
+    /** Enforce coinbase consensus rule in regtest mode */
+    void SetRegTestCoinbaseMustBeProtected() { consensus.fCoinbaseMustBeProtected = true; }
+    int GetNewTimeRule() const { return newTimeRule; }
+    int GetMasternodeProtectionBlock() const { return masternodeProtectionBlock; }
+    int GetMasternodeCollateral() const { return masternodeCollateral; }
+protected:
+    CChainParams() {}
+
+    Consensus::Params consensus;
+    CMessageHeader::MessageStartChars pchMessageStart;
+    int nEnforceBlockUpgradeMajority = 20;
+    //! Raw pub key bytes for the broadcast alert signing key.
+    std::vector<unsigned char> vAlertPubKey;
+    int nDefaultPort = 0;
+    long nMaxTipAge = 0;
+    uint64_t nPruneAfterHeight = 0;
+    EHparameters eh_epoch_1 = eh200_9;
+    EHparameters eh_epoch_2 = eh192_7;
+    // unsigned int eh_epoch_1_endtime = 150000; //it's time, not height
+    // unsigned int eh_epoch_2_starttime = 140000; //it's time, not height
+    unsigned int eh_epoch_1_endblock = 100020;
+    unsigned int eh_epoch_2_startblock = 100000;
+
+    std::vector<CDNSSeedData> vSeeds;
+    std::vector<unsigned char> base58Prefixes[MAX_BASE58_TYPES];
+    std::string bech32HRPs[MAX_BECH32_TYPES];
+    std::string strNetworkID;
+    std::string strCurrencyUnits;
+    uint32_t bip44CoinType;
+    CBlock genesis;
+    std::vector<SeedSpec6> vFixedSeeds;
+    bool fMiningRequiresPeers = false;
+    bool fDefaultConsistencyChecks = false;
+    bool fRequireStandard = false;
+    bool fMineBlocksOnDemand = false;
+    bool fTestnetToBeDeprecatedFieldRPC = false;
+    int nMasternodeCountDrift;
+    int nPoolMaxTransactions;
+    std::string strSporkKey;
+    bool fHeadersFirstSyncingActive;
+    std::string strObfuscationPoolDummyAddress;
+    int64_t nStartMasternodePayments;
+    int64_t nBudget_Fee_Confirmations;
+    CCheckpointData checkpointData;
+    std::vector<std::string> vVRewardSystemAddress;
+    int newTimeRule;
+    int masternodeProtectionBlock;
+    int masternodeCollateral;
+};
+
+/**
+ * Return the currently selected parameters. This won't change after app
+ * startup, except for unit tests.
+ */
+const CChainParams &Params();
+
+/** Return parameters for the given network. */
+CChainParams &Params(CBaseChainParams::Network network);
+
+/** Sets the params returned 
