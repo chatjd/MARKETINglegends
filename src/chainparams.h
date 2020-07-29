@@ -188,4 +188,19 @@ const CChainParams &Params();
 /** Return parameters for the given network. */
 CChainParams &Params(CBaseChainParams::Network network);
 
-/** Sets the params returned 
+/** Sets the params returned by Params() to those for the given network. */
+void SelectParams(CBaseChainParams::Network network);
+
+/**
+ * Looks for -regtest or -testnet and then calls SelectParams as appropriate.
+ * Returns false if an invalid combination is given.
+ */
+bool SelectParamsFromCommandLine();
+
+int validEHparameterList(EHparameters *ehparams, unsigned long blockheight, const CChainParams& params);
+
+/**
+ * Allows modifying the network upgrade regtest parameters.
+ */
+void UpdateNetworkUpgradeParameters(Consensus::UpgradeIndex idx, int nActivationHeight);
+#endif // BITCOIN_CHAINPARAMS_H
