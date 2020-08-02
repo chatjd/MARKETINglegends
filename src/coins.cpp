@@ -228,4 +228,184 @@ template<> void CCoinsViewCache::PushAnchor(const SproutMerkleTree &tree)
         tree,
         SPROUT,
         cacheSproutAnchors,
-        hashS
+        hashSproutAnchor
+    );
+}
+
+template<> void CCoinsViewCache::PushAnchor(const SaplingMerkleTree &tree)
+{
+    AbstractPushAnchor<SaplingMerkleTree, CAnchorsSaplingMap, CAnchorsSaplingMap::iterator, CAnchorsSaplingCacheEntry>(
+        tree,
+        SAPLING,
+        cacheSaplingAnchors,
+        hashSaplingAnchor
+    );
+}
+
+template<>
+void CCoinsViewCache::BringBestAnchorIntoCache(
+    const uint256 &currentRoot,
+    SproutMerkleTree &tree
+)
+{
+    assert(GetSproutAnchorAt(currentRoot, tree));
+}
+
+template<>
+void CCoinsViewCache::BringBestAnchorIntoCache(
+    const uint256 &currentRoot,
+    SaplingMerkleTree &tree
+)
+{
+    assert(GetSaplingAnchorAt(currentRoot, tree));
+}
+
+template<typename Tree, typename Cache, typename CacheEntry>
+void CCoinsViewCache::AbstractPopAnchor(
+    const uint256 &newrt,
+    ShieldedType type,
+    Cache &cacheAnchors,
+    uint256 &hash
+)
+{
+    auto currentRoot = GetBestAnchor(type);
+
+    // Blocks might not change the commitment tree, in which
+    // case restoring the "old" anchor during a reorg must
+    // have no effect.
+    if (currentRoot != newrt) {
+        // Bring the current best anchor into our local cache
+        // so that its tree exists in memory.
+        {
+            Tree tree;
+            BringBestAnchorIntoCache(currentRoot, tree);
+        }
+
+        // Mark the anchor as unentered, removing it from view
+        cacheAnchors[currentRoot].entered = false;
+
+        // Mark the cache entry as dirty so it's propagated
+        cacheAnchors[currentRoot].flags = CacheEntry::DIRTY;
+
+        // Mark the new root as the best anchor
+        hash = newrt;
+    }
+}
+
+void CCoinsViewCache::PopAnchor(const uint256 &newrt, ShieldedType type) {
+    switch (type) {
+        case SPROUT:
+            AbstractPopAnchor<SproutMerkleTree, CAnchorsSproutMap, CAnchorsSproutCacheEntry>(
+                newrt,
+                SPROUT,
+                cacheSproutAnchors,
+                hashSproutAnchor
+            );
+            break;
+        case SAPLING:
+            AbstractPopAnchor<SaplingMerkleTree, CAnchorsSaplingMap, CAnchorsSaplingCacheEntry>(
+                newrt,
+                SAPLING,
+                cacheSaplingAnchors,
+                hashSaplingAnchor
+            );
+            break;
+        default:
+            throw std::runtime_error("Unknown shielded type");
+    }
+}
+
+void CCoinsViewCache::SetNullifiers(const CTransaction& tx, bool spent) {
+    for (const JSDescription &joinsplit : tx.vjoinsplit) {
+        for (const uint256 &nullifier : joinsplit.nullifiers) {
+            std::pair<CNullifiersMap::iterator, bool> ret = cacheSproutNullifiers.insert(std::make_pair(nullifier, CNullifiersCacheEntry()));
+            ret.first->second.entered = spent;
+            ret.first->second.flags |= CNullifiersCacheEntry::DIRTY;
+        }
+    }
+    for (const SpendDescription &spendDescription : tx.vShieldedSpend) {
+        std::pair<CNullifiersMap::iterator, bool> ret = cacheSaplingNullifiers.insert(std::make_pair(spendDescription.nullifier, CNullifiersCacheEntry()));
+        ret.first->second.entered = spent;
+        ret.first->second.flags |= CNullifiersCacheEntry::DIRTY;
+    }
+}
+
+bool CCoinsViewCache::GetCoins(const uint256 &txid, CCoins &coins) const {
+    CCoinsMap::const_iterator it = FetchCoins(txid);
+    if (it != cacheCoins.end()) {
+        coins = it->second.coins;
+        return true;
+    }
+    return false;
+}
+
+CCoinsModifier CCoinsViewCache::ModifyCoins(const uint256 &txid) {
+    assert(!hasModifier);
+    std::pair<CCoinsMap::iterator, bool> ret = cacheCoins.insert(std::make_pair(txid, CCoinsCacheEntry()));
+    size_t cachedCoinUsage = 0;
+    if (ret.second) {
+        if (!base->GetCoins(txid, ret.first->second.coins)) {
+            // The parent view does not have this entry; mark it as fresh.
+            ret.first->second.coins.Clear();
+            ret.first->second.flags = CCoinsCacheEntry::FRESH;
+        } else if (ret.first->second.coins.IsPruned()) {
+            // The parent view only has a pruned entry for this; mark it as fresh.
+            ret.first->second.flags = CCoinsCacheEntry::FRESH;
+        }
+    } else {
+        cachedCoinUsage = ret.first->second.coins.DynamicMemoryUsage();
+    }
+    // Assume that whenever ModifyCoins is called, the entry will be modified.
+    ret.first->second.flags |= CCoinsCacheEntry::DIRTY;
+    return CCoinsModifier(*this, ret.first, cachedCoinUsage);
+}
+
+const CCoins* CCoinsViewCache::AccessCoins(const uint256 &txid) const {
+    CCoinsMap::const_iterator it = FetchCoins(txid);
+    if (it == cacheCoins.end()) {
+        return NULL;
+    } else {
+        return &it->second.coins;
+    }
+}
+
+bool CCoinsViewCache::HaveCoins(const uint256 &txid) const {
+    CCoinsMap::const_iterator it = FetchCoins(txid);
+    // We're using vtx.empty() instead of IsPruned here for performance reasons,
+    // as we only care about the case where a transaction was replaced entirely
+    // in a reorganization (which wipes vout entirely, as opposed to spending
+    // which just cleans individual outputs).
+    return (it != cacheCoins.end() && !it->second.coins.vout.empty());
+}
+
+uint256 CCoinsViewCache::GetBestBlock() const {
+    if (hashBlock.IsNull())
+        hashBlock = base->GetBestBlock();
+    return hashBlock;
+}
+
+
+uint256 CCoinsViewCache::GetBestAnchor(ShieldedType type) const {
+    switch (type) {
+        case SPROUT:
+            if (hashSproutAnchor.IsNull())
+                hashSproutAnchor = base->GetBestAnchor(type);
+            return hashSproutAnchor;
+            break;
+        case SAPLING:
+            if (hashSaplingAnchor.IsNull())
+                hashSaplingAnchor = base->GetBestAnchor(type);
+            return hashSaplingAnchor;
+            break;
+        default:
+            throw std::runtime_error("Unknown shielded type");
+    }
+}
+
+void CCoinsViewCache::SetBestBlock(const uint256 &hashBlockIn) {
+    hashBlock = hashBlockIn;
+}
+
+void BatchWriteNullifiers(CNullifiersMap &mapNullifiers, CNullifiersMap &cacheNullifiers)
+{
+    for (CNullifiersMap::iterator ch
