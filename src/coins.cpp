@@ -408,4 +408,146 @@ void CCoinsViewCache::SetBestBlock(const uint256 &hashBlockIn) {
 
 void BatchWriteNullifiers(CNullifiersMap &mapNullifiers, CNullifiersMap &cacheNullifiers)
 {
-    for (CNullifiersMap::iterator ch
+    for (CNullifiersMap::iterator child_it = mapNullifiers.begin(); child_it != mapNullifiers.end();) {
+        if (child_it->second.flags & CNullifiersCacheEntry::DIRTY) { // Ignore non-dirty entries (optimization).
+            CNullifiersMap::iterator parent_it = cacheNullifiers.find(child_it->first);
+
+            if (parent_it == cacheNullifiers.end()) {
+                CNullifiersCacheEntry& entry = cacheNullifiers[child_it->first];
+                entry.entered = child_it->second.entered;
+                entry.flags = CNullifiersCacheEntry::DIRTY;
+            } else {
+                if (parent_it->second.entered != child_it->second.entered) {
+                    parent_it->second.entered = child_it->second.entered;
+                    parent_it->second.flags |= CNullifiersCacheEntry::DIRTY;
+                }
+            }
+        }
+        CNullifiersMap::iterator itOld = child_it++;
+        mapNullifiers.erase(itOld);
+    }
+}
+
+template<typename Map, typename MapIterator, typename MapEntry>
+void BatchWriteAnchors(
+    Map &mapAnchors,
+    Map &cacheAnchors,
+    size_t &cachedCoinsUsage
+)
+{
+    for (MapIterator child_it = mapAnchors.begin(); child_it != mapAnchors.end();)
+    {
+        if (child_it->second.flags & MapEntry::DIRTY) {
+            MapIterator parent_it = cacheAnchors.find(child_it->first);
+
+            if (parent_it == cacheAnchors.end()) {
+                MapEntry& entry = cacheAnchors[child_it->first];
+                entry.entered = child_it->second.entered;
+                entry.tree = child_it->second.tree;
+                entry.flags = MapEntry::DIRTY;
+
+                cachedCoinsUsage += entry.tree.DynamicMemoryUsage();
+            } else {
+                if (parent_it->second.entered != child_it->second.entered) {
+                    // The parent may have removed the entry.
+                    parent_it->second.entered = child_it->second.entered;
+                    parent_it->second.flags |= MapEntry::DIRTY;
+                }
+            }
+        }
+
+        MapIterator itOld = child_it++;
+        mapAnchors.erase(itOld);
+    }
+}
+
+bool CCoinsViewCache::BatchWrite(CCoinsMap &mapCoins,
+                                 const uint256 &hashBlockIn,
+                                 const uint256 &hashSproutAnchorIn,
+                                 const uint256 &hashSaplingAnchorIn,
+                                 CAnchorsSproutMap &mapSproutAnchors,
+                                 CAnchorsSaplingMap &mapSaplingAnchors,
+                                 CNullifiersMap &mapSproutNullifiers,
+                                 CNullifiersMap &mapSaplingNullifiers) {
+    assert(!hasModifier);
+    for (CCoinsMap::iterator it = mapCoins.begin(); it != mapCoins.end();) {
+        if (it->second.flags & CCoinsCacheEntry::DIRTY) { // Ignore non-dirty entries (optimization).
+            CCoinsMap::iterator itUs = cacheCoins.find(it->first);
+            if (itUs == cacheCoins.end()) {
+                if (!it->second.coins.IsPruned()) {
+                    // The parent cache does not have an entry, while the child
+                    // cache does have (a non-pruned) one. Move the data up, and
+                    // mark it as fresh (if the grandparent did have it, we
+                    // would have pulled it in at first GetCoins).
+                    assert(it->second.flags & CCoinsCacheEntry::FRESH);
+                    CCoinsCacheEntry& entry = cacheCoins[it->first];
+                    entry.coins.swap(it->second.coins);
+                    cachedCoinsUsage += entry.coins.DynamicMemoryUsage();
+                    entry.flags = CCoinsCacheEntry::DIRTY | CCoinsCacheEntry::FRESH;
+                }
+            } else {
+                if ((itUs->second.flags & CCoinsCacheEntry::FRESH) && it->second.coins.IsPruned()) {
+                    // The grandparent does not have an entry, and the child is
+                    // modified and being pruned. This means we can just delete
+                    // it from the parent.
+                    cachedCoinsUsage -= itUs->second.coins.DynamicMemoryUsage();
+                    cacheCoins.erase(itUs);
+                } else {
+                    // A normal modification.
+                    cachedCoinsUsage -= itUs->second.coins.DynamicMemoryUsage();
+                    itUs->second.coins.swap(it->second.coins);
+                    cachedCoinsUsage += itUs->second.coins.DynamicMemoryUsage();
+                    itUs->second.flags |= CCoinsCacheEntry::DIRTY;
+                }
+            }
+        }
+        CCoinsMap::iterator itOld = it++;
+        mapCoins.erase(itOld);
+    }
+
+    ::BatchWriteAnchors<CAnchorsSproutMap, CAnchorsSproutMap::iterator, CAnchorsSproutCacheEntry>(mapSproutAnchors, cacheSproutAnchors, cachedCoinsUsage);
+    ::BatchWriteAnchors<CAnchorsSaplingMap, CAnchorsSaplingMap::iterator, CAnchorsSaplingCacheEntry>(mapSaplingAnchors, cacheSaplingAnchors, cachedCoinsUsage);
+
+    ::BatchWriteNullifiers(mapSproutNullifiers, cacheSproutNullifiers);
+    ::BatchWriteNullifiers(mapSaplingNullifiers, cacheSaplingNullifiers);
+
+    hashSproutAnchor = hashSproutAnchorIn;
+    hashSaplingAnchor = hashSaplingAnchorIn;
+    hashBlock = hashBlockIn;
+    return true;
+}
+
+bool CCoinsViewCache::Flush() {
+    bool fOk = base->BatchWrite(cacheCoins, hashBlock, hashSproutAnchor, hashSaplingAnchor, cacheSproutAnchors, cacheSaplingAnchors, cacheSproutNullifiers, cacheSaplingNullifiers);
+    cacheCoins.clear();
+    cacheSproutAnchors.clear();
+    cacheSaplingAnchors.clear();
+    cacheSproutNullifiers.clear();
+    cacheSaplingNullifiers.clear();
+    cachedCoinsUsage = 0;
+    return fOk;
+}
+
+unsigned int CCoinsViewCache::GetCacheSize() const {
+    return cacheCoins.size();
+}
+
+const CTxOut &CCoinsViewCache::GetOutputFor(const CTxIn& input) const
+{
+    const CCoins* coins = AccessCoins(input.prevout.hash);
+    assert(coins && coins->IsAvailable(input.prevout.n));
+    return coins->vout[input.prevout.n];
+}
+
+CAmount CCoinsViewCache::GetValueIn(const CTransaction& tx) const
+{
+    if (tx.IsCoinBase())
+        return 0;
+
+    CAmount nResult = 0;
+    for (unsigned int i = 0; i < tx.vin.size(); i++)
+        nResult += GetOutputFor(tx.vin[i]).nValue;
+
+    nResult += tx.GetShieldedValueIn();
+
+    re
