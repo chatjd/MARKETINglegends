@@ -550,4 +550,111 @@ CAmount CCoinsViewCache::GetValueIn(const CTransaction& tx) const
 
     nResult += tx.GetShieldedValueIn();
 
-    re
+    return nResult;
+}
+
+bool CCoinsViewCache::HaveJoinSplitRequirements(const CTransaction& tx) const
+{
+    boost::unordered_map<uint256, SproutMerkleTree, CCoinsKeyHasher> intermediates;
+
+    BOOST_FOREACH(const JSDescription &joinsplit, tx.vjoinsplit)
+    {
+        BOOST_FOREACH(const uint256& nullifier, joinsplit.nullifiers)
+        {
+            if (GetNullifier(nullifier, SPROUT)) {
+                // If the nullifier is set, this transaction
+                // double-spends!
+                return false;
+            }
+        }
+
+        SproutMerkleTree tree;
+        auto it = intermediates.find(joinsplit.anchor);
+        if (it != intermediates.end()) {
+            tree = it->second;
+        } else if (!GetSproutAnchorAt(joinsplit.anchor, tree)) {
+            return false;
+        }
+
+        BOOST_FOREACH(const uint256& commitment, joinsplit.commitments)
+        {
+            tree.append(commitment);
+        }
+
+        intermediates.insert(std::make_pair(tree.root(), tree));
+    }
+
+    for (const SpendDescription &spendDescription : tx.vShieldedSpend) {
+        if (GetNullifier(spendDescription.nullifier, SAPLING)) // Prevent double spends
+            return false;
+
+        SaplingMerkleTree tree;
+        if (!GetSaplingAnchorAt(spendDescription.anchor, tree)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool CCoinsViewCache::HaveInputs(const CTransaction& tx) const
+{
+    if (!tx.IsCoinBase()) {
+        for (unsigned int i = 0; i < tx.vin.size(); i++) {
+            const COutPoint &prevout = tx.vin[i].prevout;
+            const CCoins* coins = AccessCoins(prevout.hash);
+            if (!coins || !coins->IsAvailable(prevout.n)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+double CCoinsViewCache::GetPriority(const CTransaction &tx, int nHeight) const
+{
+    if (tx.IsCoinBase())
+        return 0.0;
+
+    // Shielded transfers do not reveal any information about the value or age of a note, so we
+    // cannot apply the priority algorithm used for transparent utxos.  Instead, we just
+    // use the maximum priority for all (partially or fully) shielded transactions.
+    // (Note that coinbase transactions cannot contain JoinSplits, or Sapling shielded Spends or Outputs.)
+
+    if (tx.vjoinsplit.size() > 0 || tx.vShieldedSpend.size() > 0 || tx.vShieldedOutput.size() > 0) {
+        return MAX_PRIORITY;
+    }
+
+    // FIXME: this logic is partially duplicated between here and CreateNewBlock in miner.cpp.
+    double dResult = 0.0;
+    BOOST_FOREACH(const CTxIn& txin, tx.vin)
+    {
+        const CCoins* coins = AccessCoins(txin.prevout.hash);
+        assert(coins);
+        if (!coins->IsAvailable(txin.prevout.n)) continue;
+        if (coins->nHeight < nHeight) {
+            dResult += coins->vout[txin.prevout.n].nValue * (nHeight-coins->nHeight);
+        }
+    }
+
+    return tx.ComputePriority(dResult);
+}
+
+CCoinsModifier::CCoinsModifier(CCoinsViewCache& cache_, CCoinsMap::iterator it_, size_t usage) : cache(cache_), it(it_), cachedCoinUsage(usage) {
+    assert(!cache.hasModifier);
+    cache.hasModifier = true;
+}
+
+CCoinsModifier::~CCoinsModifier()
+{
+    assert(cache.hasModifier);
+    cache.hasModifier = false;
+    it->second.coins.Cleanup();
+    cache.cachedCoinsUsage -= cachedCoinUsage; // Subtract the old usage
+    if ((it->second.flags & CCoinsCacheEntry::FRESH) && it->second.coins.IsPruned()) {
+        cache.cacheCoins.erase(it);
+    } else {
+        // If the coin still exists after the modification, add the new usage
+        cache.cachedCoinsUsage += it->second.coins.DynamicMemoryUsage();
+    }
+}
