@@ -87,4 +87,67 @@ CScript ParseScript(const std::string& s)
         }
     }
 
-    retu
+    return result;
+}
+
+bool DecodeHexTx(CTransaction& tx, const std::string& strHexTx)
+{
+    if (!IsHex(strHexTx))
+        return false;
+
+    vector<unsigned char> txData(ParseHex(strHexTx));
+    CDataStream ssData(txData, SER_NETWORK, PROTOCOL_VERSION);
+    try {
+        ssData >> tx;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+
+    return true;
+}
+
+bool DecodeHexBlk(CBlock& block, const std::string& strHexBlk)
+{
+    if (!IsHex(strHexBlk))
+        return false;
+
+    std::vector<unsigned char> blockData(ParseHex(strHexBlk));
+    CDataStream ssBlock(blockData, SER_NETWORK, PROTOCOL_VERSION);
+    try {
+        ssBlock >> block;
+    }
+    catch (const std::exception&) {
+        return false;
+    }
+
+    return true;
+}
+
+uint256 ParseHashUV(const UniValue& v, const string& strName)
+{
+    string strHex;
+    if (v.isStr())
+        strHex = v.getValStr();
+    return ParseHashStr(strHex, strName);  // Note: ParseHashStr("") throws a runtime_error
+}
+
+uint256 ParseHashStr(const std::string& strHex, const std::string& strName)
+{
+    if (!IsHex(strHex)) // Note: IsHex("") is false
+        throw runtime_error(strName+" must be hexadecimal string (not '"+strHex+"')");
+
+    uint256 result;
+    result.SetHex(strHex);
+    return result;
+}
+
+vector<unsigned char> ParseHexUV(const UniValue& v, const string& strName)
+{
+    string strHex;
+    if (v.isStr())
+        strHex = v.getValStr();
+    if (!IsHex(strHex))
+        throw runtime_error(strName+" must be hexadecimal string (not '"+strHex+"')");
+    return ParseHex(strHex);
+}
