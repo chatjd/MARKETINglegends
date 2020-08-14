@@ -101,4 +101,97 @@ string ScriptToAsmStr(const CScript& script, const bool fAttemptSighashDecode)
                         const unsigned char chSigHashType = vch.back();
                         if (mapSigHashTypes.count(chSigHashType)) {
                             strSigHashDecode = "[" + mapSigHashTypes.find(chSigHashType)->second + "]";
-                            vch.pop_back(); // remove the sighash type byte. it wi
+                            vch.pop_back(); // remove the sighash type byte. it will be replaced by the decode.
+                        }
+                    }
+                    str += HexStr(vch) + strSigHashDecode;
+                } else {
+                    str += HexStr(vch);
+                }
+            }
+        } else {
+            str += GetOpName(opcode);
+        }
+    }
+    return str;
+}
+
+string EncodeHexTx(const CTransaction& tx)
+{
+    CDataStream ssTx(SER_NETWORK, PROTOCOL_VERSION);
+    ssTx << tx;
+    return HexStr(ssTx.begin(), ssTx.end());
+}
+
+void ScriptPubKeyToUniv(const CScript& scriptPubKey,
+                        UniValue& out, bool fIncludeHex)
+{
+    txnouttype type;
+    vector<CTxDestination> addresses;
+    int nRequired;
+
+    out.pushKV("asm", ScriptToAsmStr(scriptPubKey));
+    if (fIncludeHex)
+        out.pushKV("hex", HexStr(scriptPubKey.begin(), scriptPubKey.end()));
+
+    if (!ExtractDestinations(scriptPubKey, type, addresses, nRequired)) {
+        out.pushKV("type", GetTxnOutputType(type));
+        return;
+    }
+
+    out.pushKV("reqSigs", nRequired);
+    out.pushKV("type", GetTxnOutputType(type));
+
+    UniValue a(UniValue::VARR);
+    for (const CTxDestination& addr : addresses) {
+        a.push_back(EncodeDestination(addr));
+    }
+    out.pushKV("addresses", a);
+}
+
+void TxToUniv(const CTransaction& tx, const uint256& hashBlock, UniValue& entry)
+{
+    entry.pushKV("txid", tx.GetHash().GetHex());
+    entry.pushKV("version", tx.nVersion);
+    entry.pushKV("locktime", (int64_t)tx.nLockTime);
+
+    UniValue vin(UniValue::VARR);
+    BOOST_FOREACH(const CTxIn& txin, tx.vin) {
+        UniValue in(UniValue::VOBJ);
+        if (tx.IsCoinBase())
+            in.pushKV("coinbase", HexStr(txin.scriptSig.begin(), txin.scriptSig.end()));
+        else {
+            in.pushKV("txid", txin.prevout.hash.GetHex());
+            in.pushKV("vout", (int64_t)txin.prevout.n);
+            UniValue o(UniValue::VOBJ);
+            o.pushKV("asm", ScriptToAsmStr(txin.scriptSig, true));
+            o.pushKV("hex", HexStr(txin.scriptSig.begin(), txin.scriptSig.end()));
+            in.pushKV("scriptSig", o);
+        }
+        in.pushKV("sequence", (int64_t)txin.nSequence);
+        vin.push_back(in);
+    }
+    entry.pushKV("vin", vin);
+
+    UniValue vout(UniValue::VARR);
+    for (unsigned int i = 0; i < tx.vout.size(); i++) {
+        const CTxOut& txout = tx.vout[i];
+
+        UniValue out(UniValue::VOBJ);
+
+        UniValue outValue(UniValue::VNUM, FormatMoney(txout.nValue));
+        out.pushKV("value", outValue);
+        out.pushKV("n", (int64_t)i);
+
+        UniValue o(UniValue::VOBJ);
+        ScriptPubKeyToUniv(txout.scriptPubKey, o, true);
+        out.pushKV("scriptPubKey", o);
+        vout.push_back(out);
+    }
+    entry.pushKV("vout", vout);
+
+    if (!hashBlock.IsNull())
+        entry.pushKV("blockhash", hashBlock.GetHex());
+
+    entry.pushKV("hex", EncodeHexTx(tx)); // the hex-encoded transaction. used the name "hex" to be consistent with the verbose output of "getrawtransaction".
+}
