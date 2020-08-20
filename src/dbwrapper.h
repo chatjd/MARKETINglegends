@@ -246,3 +246,20 @@ public:
     }
 
     bool Sync()
+    {
+        CDBBatch batch(*this);
+        return WriteBatch(batch, true);
+    }
+
+    CDBIterator *NewIterator()
+    {
+        return new CDBIterator(*this, pdb->NewIterator(iteroptions));
+    }
+
+    /**
+     * Return true if the database managed by this class contains no entries.
+     */
+    bool IsEmpty();
+};
+
+#endif // BITCOIN_DBWRAPPER_H
