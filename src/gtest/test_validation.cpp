@@ -150,3 +150,13 @@ TEST(Validation, ReceivedBlockTransactions) {
     {
         SCOPED_TRACE("ExpectOptionalAmount call");
         ExpectOptionalAmount(10, fakeIndex1.nChainSproutValue);
+    }
+    {
+        SCOPED_TRACE("ExpectOptionalAmount call");
+        ExpectOptionalAmount(20, fakeIndex2.nSproutValue);
+    }
+    {
+        SCOPED_TRACE("ExpectOptionalAmount call");
+        ExpectOptionalAmount(30, fakeIndex2.nChainSproutValue);
+    }
+}
