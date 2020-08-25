@@ -240,4 +240,130 @@ std::string EncodeExtKey(const CExtKey& key)
     size_t size = data.size();
     data.resize(size + BIP32_EXTKEY_SIZE);
     key.Encode(data.data() + size);
-    std::string ret = E
+    std::string ret = EncodeBase58Check(data);
+    memory_cleanse(data.data(), data.size());
+    return ret;
+}
+
+std::string EncodeDestination(const CTxDestination& dest)
+{
+    return boost::apply_visitor(DestinationEncoder(Params()), dest);
+}
+
+CTxDestination DecodeDestination(const std::string& str)
+{
+    return DecodeDestination(str, Params());
+}
+
+bool IsValidDestinationString(const std::string& str, const CChainParams& params)
+{
+    return IsValidDestination(DecodeDestination(str, params));
+}
+
+bool IsValidDestinationString(const std::string& str)
+{
+    return IsValidDestinationString(str, Params());
+}
+
+std::string EncodePaymentAddress(const libzcash::PaymentAddress& zaddr)
+{
+    return boost::apply_visitor(PaymentAddressEncoder(Params()), zaddr);
+}
+
+libzcash::PaymentAddress DecodePaymentAddress(const std::string& str)
+{
+    std::vector<unsigned char> data;
+    if (DecodeBase58Check(str, data)) {
+        const std::vector<unsigned char>& zaddr_prefix = Params().Base58Prefix(CChainParams::ZCPAYMENT_ADDRRESS);
+        if ((data.size() == libzcash::SerializedSproutPaymentAddressSize + zaddr_prefix.size()) &&
+            std::equal(zaddr_prefix.begin(), zaddr_prefix.end(), data.begin())) {
+            CSerializeData serialized(data.begin() + zaddr_prefix.size(), data.end());
+            CDataStream ss(serialized, SER_NETWORK, PROTOCOL_VERSION);
+            libzcash::SproutPaymentAddress ret;
+            ss >> ret;
+            return ret;
+        }
+    }
+    data.clear();
+    auto bech = bech32::Decode(str);
+    if (bech.first == Params().Bech32HRP(CChainParams::SAPLING_PAYMENT_ADDRESS) &&
+        bech.second.size() == ConvertedSaplingPaymentAddressSize) {
+        // Bech32 decoding
+        data.reserve((bech.second.size() * 5) / 8);
+        if (ConvertBits<5, 8, false>([&](unsigned char c) { data.push_back(c); }, bech.second.begin(), bech.second.end())) {
+            CDataStream ss(data, SER_NETWORK, PROTOCOL_VERSION);
+            libzcash::SaplingPaymentAddress ret;
+            ss >> ret;
+            return ret;
+        }
+    }
+    return libzcash::InvalidEncoding();
+}
+
+bool IsValidPaymentAddressString(const std::string& str) {
+    return IsValidPaymentAddress(DecodePaymentAddress(str));
+}
+
+std::string EncodeViewingKey(const libzcash::ViewingKey& vk)
+{
+    return boost::apply_visitor(ViewingKeyEncoder(Params()), vk);
+}
+
+libzcash::ViewingKey DecodeViewingKey(const std::string& str)
+{
+    std::vector<unsigned char> data;
+    if (DecodeBase58Check(str, data)) {
+        const std::vector<unsigned char>& vk_prefix = Params().Base58Prefix(CChainParams::ZCVIEWING_KEY);
+        if ((data.size() == libzcash::SerializedSproutViewingKeySize + vk_prefix.size()) &&
+            std::equal(vk_prefix.begin(), vk_prefix.end(), data.begin())) {
+            CSerializeData serialized(data.begin() + vk_prefix.size(), data.end());
+            CDataStream ss(serialized, SER_NETWORK, PROTOCOL_VERSION);
+            libzcash::SproutViewingKey ret;
+            ss >> ret;
+            memory_cleanse(serialized.data(), serialized.size());
+            memory_cleanse(data.data(), data.size());
+            return ret;
+        }
+    }
+    memory_cleanse(data.data(), data.size());
+    return libzcash::InvalidEncoding();
+}
+
+std::string EncodeSpendingKey(const libzcash::SpendingKey& zkey)
+{
+    return boost::apply_visitor(SpendingKeyEncoder(Params()), zkey);
+}
+
+libzcash::SpendingKey DecodeSpendingKey(const std::string& str)
+{
+    std::vector<unsigned char> data;
+    if (DecodeBase58Check(str, data)) {
+        const std::vector<unsigned char>& zkey_prefix = Params().Base58Prefix(CChainParams::ZCSPENDING_KEY);
+        if ((data.size() == libzcash::SerializedSproutSpendingKeySize + zkey_prefix.size()) &&
+            std::equal(zkey_prefix.begin(), zkey_prefix.end(), data.begin())) {
+            CSerializeData serialized(data.begin() + zkey_prefix.size(), data.end());
+            CDataStream ss(serialized, SER_NETWORK, PROTOCOL_VERSION);
+            libzcash::SproutSpendingKey ret;
+            ss >> ret;
+            memory_cleanse(serialized.data(), serialized.size());
+            memory_cleanse(data.data(), data.size());
+            return ret;
+        }
+    }
+    data.clear();
+    auto bech = bech32::Decode(str);
+    if (bech.first == Params().Bech32HRP(CChainParams::SAPLING_EXTENDED_SPEND_KEY) &&
+        bech.second.size() == ConvertedSaplingExtendedSpendingKeySize) {
+        // Bech32 decoding
+        data.reserve((bech.second.size() * 5) / 8);
+        if (ConvertBits<5, 8, false>([&](unsigned char c) { data.push_back(c); }, bech.second.begin(), bech.second.end())) {
+            CDataStream ss(data, SER_NETWORK, PROTOCOL_VERSION);
+            libzcash::SaplingExtendedSpendingKey ret;
+            ss >> ret;
+            memory_cleanse(data.data(), data.size());
+            return ret;
+        }
+    }
+    memory_cleanse(data.data(), data.size());
+    return libzcash::InvalidEncoding();
+}
