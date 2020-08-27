@@ -362,4 +362,201 @@ class Benchmark {
     if (cpuinfo != NULL) {
       char line[1000];
       int num_cpus = 0;
-      std::string cpu_ty
+      std::string cpu_type;
+      std::string cache_size;
+      while (fgets(line, sizeof(line), cpuinfo) != NULL) {
+        const char* sep = strchr(line, ':');
+        if (sep == NULL) {
+          continue;
+        }
+        Slice key = TrimSpace(Slice(line, sep - 1 - line));
+        Slice val = TrimSpace(Slice(sep + 1));
+        if (key == "model name") {
+          ++num_cpus;
+          cpu_type = val.ToString();
+        } else if (key == "cache size") {
+          cache_size = val.ToString();
+        }
+      }
+      fclose(cpuinfo);
+      fprintf(stderr, "CPU:        %d * %s\n", num_cpus, cpu_type.c_str());
+      fprintf(stderr, "CPUCache:   %s\n", cache_size.c_str());
+    }
+#endif
+  }
+
+ public:
+  Benchmark()
+  : cache_(FLAGS_cache_size >= 0 ? NewLRUCache(FLAGS_cache_size) : NULL),
+    filter_policy_(FLAGS_bloom_bits >= 0
+                   ? NewBloomFilterPolicy(FLAGS_bloom_bits)
+                   : NULL),
+    db_(NULL),
+    num_(FLAGS_num),
+    value_size_(FLAGS_value_size),
+    entries_per_batch_(1),
+    reads_(FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads),
+    heap_counter_(0) {
+    std::vector<std::string> files;
+    Env::Default()->GetChildren(FLAGS_db, &files);
+    for (size_t i = 0; i < files.size(); i++) {
+      if (Slice(files[i]).starts_with("heap-")) {
+        Env::Default()->DeleteFile(std::string(FLAGS_db) + "/" + files[i]);
+      }
+    }
+    if (!FLAGS_use_existing_db) {
+      DestroyDB(FLAGS_db, Options());
+    }
+  }
+
+  ~Benchmark() {
+    delete db_;
+    delete cache_;
+    delete filter_policy_;
+  }
+
+  void Run() {
+    PrintHeader();
+    Open();
+
+    const char* benchmarks = FLAGS_benchmarks;
+    while (benchmarks != NULL) {
+      const char* sep = strchr(benchmarks, ',');
+      Slice name;
+      if (sep == NULL) {
+        name = benchmarks;
+        benchmarks = NULL;
+      } else {
+        name = Slice(benchmarks, sep - benchmarks);
+        benchmarks = sep + 1;
+      }
+
+      // Reset parameters that may be overridden below
+      num_ = FLAGS_num;
+      reads_ = (FLAGS_reads < 0 ? FLAGS_num : FLAGS_reads);
+      value_size_ = FLAGS_value_size;
+      entries_per_batch_ = 1;
+      write_options_ = WriteOptions();
+
+      void (Benchmark::*method)(ThreadState*) = NULL;
+      bool fresh_db = false;
+      int num_threads = FLAGS_threads;
+
+      if (name == Slice("fillseq")) {
+        fresh_db = true;
+        method = &Benchmark::WriteSeq;
+      } else if (name == Slice("fillbatch")) {
+        fresh_db = true;
+        entries_per_batch_ = 1000;
+        method = &Benchmark::WriteSeq;
+      } else if (name == Slice("fillrandom")) {
+        fresh_db = true;
+        method = &Benchmark::WriteRandom;
+      } else if (name == Slice("overwrite")) {
+        fresh_db = false;
+        method = &Benchmark::WriteRandom;
+      } else if (name == Slice("fillsync")) {
+        fresh_db = true;
+        num_ /= 1000;
+        write_options_.sync = true;
+        method = &Benchmark::WriteRandom;
+      } else if (name == Slice("fill100K")) {
+        fresh_db = true;
+        num_ /= 1000;
+        value_size_ = 100 * 1000;
+        method = &Benchmark::WriteRandom;
+      } else if (name == Slice("readseq")) {
+        method = &Benchmark::ReadSequential;
+      } else if (name == Slice("readreverse")) {
+        method = &Benchmark::ReadReverse;
+      } else if (name == Slice("readrandom")) {
+        method = &Benchmark::ReadRandom;
+      } else if (name == Slice("readmissing")) {
+        method = &Benchmark::ReadMissing;
+      } else if (name == Slice("seekrandom")) {
+        method = &Benchmark::SeekRandom;
+      } else if (name == Slice("readhot")) {
+        method = &Benchmark::ReadHot;
+      } else if (name == Slice("readrandomsmall")) {
+        reads_ /= 1000;
+        method = &Benchmark::ReadRandom;
+      } else if (name == Slice("deleteseq")) {
+        method = &Benchmark::DeleteSeq;
+      } else if (name == Slice("deleterandom")) {
+        method = &Benchmark::DeleteRandom;
+      } else if (name == Slice("readwhilewriting")) {
+        num_threads++;  // Add extra thread for writing
+        method = &Benchmark::ReadWhileWriting;
+      } else if (name == Slice("compact")) {
+        method = &Benchmark::Compact;
+      } else if (name == Slice("crc32c")) {
+        method = &Benchmark::Crc32c;
+      } else if (name == Slice("acquireload")) {
+        method = &Benchmark::AcquireLoad;
+      } else if (name == Slice("snappycomp")) {
+        method = &Benchmark::SnappyCompress;
+      } else if (name == Slice("snappyuncomp")) {
+        method = &Benchmark::SnappyUncompress;
+      } else if (name == Slice("heapprofile")) {
+        HeapProfile();
+      } else if (name == Slice("stats")) {
+        PrintStats("leveldb.stats");
+      } else if (name == Slice("sstables")) {
+        PrintStats("leveldb.sstables");
+      } else {
+        if (name != Slice()) {  // No error message for empty name
+          fprintf(stderr, "unknown benchmark '%s'\n", name.ToString().c_str());
+        }
+      }
+
+      if (fresh_db) {
+        if (FLAGS_use_existing_db) {
+          fprintf(stdout, "%-12s : skipped (--use_existing_db is true)\n",
+                  name.ToString().c_str());
+          method = NULL;
+        } else {
+          delete db_;
+          db_ = NULL;
+          DestroyDB(FLAGS_db, Options());
+          Open();
+        }
+      }
+
+      if (method != NULL) {
+        RunBenchmark(num_threads, name, method);
+      }
+    }
+  }
+
+ private:
+  struct ThreadArg {
+    Benchmark* bm;
+    SharedState* shared;
+    ThreadState* thread;
+    void (Benchmark::*method)(ThreadState*);
+  };
+
+  static void ThreadBody(void* v) {
+    ThreadArg* arg = reinterpret_cast<ThreadArg*>(v);
+    SharedState* shared = arg->shared;
+    ThreadState* thread = arg->thread;
+    {
+      MutexLock l(&shared->mu);
+      shared->num_initialized++;
+      if (shared->num_initialized >= shared->total) {
+        shared->cv.SignalAll();
+      }
+      while (!shared->start) {
+        shared->cv.Wait();
+      }
+    }
+
+    thread->stats.Start();
+    (arg->bm->*(arg->method))(thread);
+    thread->stats.Stop();
+
+    {
+      MutexLock l(&shared->mu);
+      shared->num_done++;
+      if (shared->num_done >= shared->total) {
+        shared->cv.SignalA
