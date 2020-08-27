@@ -48,3 +48,72 @@ class AutoCompactTest {
   }
 
   void DoReads(int n);
+};
+
+static const int kValueSize = 200 * 1024;
+static const int kTotalSize = 100 * 1024 * 1024;
+static const int kCount = kTotalSize / kValueSize;
+
+// Read through the first n keys repeatedly and check that they get
+// compacted (verified by checking the size of the key space).
+void AutoCompactTest::DoReads(int n) {
+  std::string value(kValueSize, 'x');
+  DBImpl* dbi = reinterpret_cast<DBImpl*>(db_);
+
+  // Fill database
+  for (int i = 0; i < kCount; i++) {
+    ASSERT_OK(db_->Put(WriteOptions(), Key(i), value));
+  }
+  ASSERT_OK(dbi->TEST_CompactMemTable());
+
+  // Delete everything
+  for (int i = 0; i < kCount; i++) {
+    ASSERT_OK(db_->Delete(WriteOptions(), Key(i)));
+  }
+  ASSERT_OK(dbi->TEST_CompactMemTable());
+
+  // Get initial measurement of the space we will be reading.
+  const int64_t initial_size = Size(Key(0), Key(n));
+  const int64_t initial_other_size = Size(Key(n), Key(kCount));
+
+  // Read until size drops significantly.
+  std::string limit_key = Key(n);
+  for (int read = 0; true; read++) {
+    ASSERT_LT(read, 100) << "Taking too long to compact";
+    Iterator* iter = db_->NewIterator(ReadOptions());
+    for (iter->SeekToFirst();
+         iter->Valid() && iter->key().ToString() < limit_key;
+         iter->Next()) {
+      // Drop data
+    }
+    delete iter;
+    // Wait a little bit to allow any triggered compactions to complete.
+    Env::Default()->SleepForMicroseconds(1000000);
+    uint64_t size = Size(Key(0), Key(n));
+    fprintf(stderr, "iter %3d => %7.3f MB [other %7.3f MB]\n",
+            read+1, size/1048576.0, Size(Key(n), Key(kCount))/1048576.0);
+    if (size <= initial_size/10) {
+      break;
+    }
+  }
+
+  // Verify that the size of the key space not touched by the reads
+  // is pretty much unchanged.
+  const int64_t final_other_size = Size(Key(n), Key(kCount));
+  ASSERT_LE(final_other_size, initial_other_size + 1048576);
+  ASSERT_GE(final_other_size, initial_other_size/5 - 1048576);
+}
+
+TEST(AutoCompactTest, ReadAll) {
+  DoReads(kCount);
+}
+
+TEST(AutoCompactTest, ReadHalf) {
+  DoReads(kCount/2);
+}
+
+}  // namespace leveldb
+
+int main(int argc, char** argv) {
+  return leveldb::test::RunAllTests();
+}
