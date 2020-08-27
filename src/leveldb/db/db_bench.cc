@@ -141,4 +141,225 @@ class RandomGenerator {
 static Slice TrimSpace(Slice s) {
   size_t start = 0;
   while (start < s.size() && isspace(s[start])) {
-  
+    start++;
+  }
+  size_t limit = s.size();
+  while (limit > start && isspace(s[limit-1])) {
+    limit--;
+  }
+  return Slice(s.data() + start, limit - start);
+}
+
+static void AppendWithSpace(std::string* str, Slice msg) {
+  if (msg.empty()) return;
+  if (!str->empty()) {
+    str->push_back(' ');
+  }
+  str->append(msg.data(), msg.size());
+}
+
+class Stats {
+ private:
+  double start_;
+  double finish_;
+  double seconds_;
+  int done_;
+  int next_report_;
+  int64_t bytes_;
+  double last_op_finish_;
+  Histogram hist_;
+  std::string message_;
+
+ public:
+  Stats() { Start(); }
+
+  void Start() {
+    next_report_ = 100;
+    last_op_finish_ = start_;
+    hist_.Clear();
+    done_ = 0;
+    bytes_ = 0;
+    seconds_ = 0;
+    start_ = Env::Default()->NowMicros();
+    finish_ = start_;
+    message_.clear();
+  }
+
+  void Merge(const Stats& other) {
+    hist_.Merge(other.hist_);
+    done_ += other.done_;
+    bytes_ += other.bytes_;
+    seconds_ += other.seconds_;
+    if (other.start_ < start_) start_ = other.start_;
+    if (other.finish_ > finish_) finish_ = other.finish_;
+
+    // Just keep the messages from one thread
+    if (message_.empty()) message_ = other.message_;
+  }
+
+  void Stop() {
+    finish_ = Env::Default()->NowMicros();
+    seconds_ = (finish_ - start_) * 1e-6;
+  }
+
+  void AddMessage(Slice msg) {
+    AppendWithSpace(&message_, msg);
+  }
+
+  void FinishedSingleOp() {
+    if (FLAGS_histogram) {
+      double now = Env::Default()->NowMicros();
+      double micros = now - last_op_finish_;
+      hist_.Add(micros);
+      if (micros > 20000) {
+        fprintf(stderr, "long op: %.1f micros%30s\r", micros, "");
+        fflush(stderr);
+      }
+      last_op_finish_ = now;
+    }
+
+    done_++;
+    if (done_ >= next_report_) {
+      if      (next_report_ < 1000)   next_report_ += 100;
+      else if (next_report_ < 5000)   next_report_ += 500;
+      else if (next_report_ < 10000)  next_report_ += 1000;
+      else if (next_report_ < 50000)  next_report_ += 5000;
+      else if (next_report_ < 100000) next_report_ += 10000;
+      else if (next_report_ < 500000) next_report_ += 50000;
+      else                            next_report_ += 100000;
+      fprintf(stderr, "... finished %d ops%30s\r", done_, "");
+      fflush(stderr);
+    }
+  }
+
+  void AddBytes(int64_t n) {
+    bytes_ += n;
+  }
+
+  void Report(const Slice& name) {
+    // Pretend at least one op was done in case we are running a benchmark
+    // that does not call FinishedSingleOp().
+    if (done_ < 1) done_ = 1;
+
+    std::string extra;
+    if (bytes_ > 0) {
+      // Rate is computed on actual elapsed time, not the sum of per-thread
+      // elapsed times.
+      double elapsed = (finish_ - start_) * 1e-6;
+      char rate[100];
+      snprintf(rate, sizeof(rate), "%6.1f MB/s",
+               (bytes_ / 1048576.0) / elapsed);
+      extra = rate;
+    }
+    AppendWithSpace(&extra, message_);
+
+    fprintf(stdout, "%-12s : %11.3f micros/op;%s%s\n",
+            name.ToString().c_str(),
+            seconds_ * 1e6 / done_,
+            (extra.empty() ? "" : " "),
+            extra.c_str());
+    if (FLAGS_histogram) {
+      fprintf(stdout, "Microseconds per op:\n%s\n", hist_.ToString().c_str());
+    }
+    fflush(stdout);
+  }
+};
+
+// State shared by all concurrent executions of the same benchmark.
+struct SharedState {
+  port::Mutex mu;
+  port::CondVar cv;
+  int total;
+
+  // Each thread goes through the following states:
+  //    (1) initializing
+  //    (2) waiting for others to be initialized
+  //    (3) running
+  //    (4) done
+
+  int num_initialized;
+  int num_done;
+  bool start;
+
+  SharedState() : cv(&mu) { }
+};
+
+// Per-thread state for concurrent executions of the same benchmark.
+struct ThreadState {
+  int tid;             // 0..n-1 when running in n threads
+  Random rand;         // Has different seeds for different threads
+  Stats stats;
+  SharedState* shared;
+
+  ThreadState(int index)
+      : tid(index),
+        rand(1000 + index) {
+  }
+};
+
+}  // namespace
+
+class Benchmark {
+ private:
+  Cache* cache_;
+  const FilterPolicy* filter_policy_;
+  DB* db_;
+  int num_;
+  int value_size_;
+  int entries_per_batch_;
+  WriteOptions write_options_;
+  int reads_;
+  int heap_counter_;
+
+  void PrintHeader() {
+    const int kKeySize = 16;
+    PrintEnvironment();
+    fprintf(stdout, "Keys:       %d bytes each\n", kKeySize);
+    fprintf(stdout, "Values:     %d bytes each (%d bytes after compression)\n",
+            FLAGS_value_size,
+            static_cast<int>(FLAGS_value_size * FLAGS_compression_ratio + 0.5));
+    fprintf(stdout, "Entries:    %d\n", num_);
+    fprintf(stdout, "RawSize:    %.1f MB (estimated)\n",
+            ((static_cast<int64_t>(kKeySize + FLAGS_value_size) * num_)
+             / 1048576.0));
+    fprintf(stdout, "FileSize:   %.1f MB (estimated)\n",
+            (((kKeySize + FLAGS_value_size * FLAGS_compression_ratio) * num_)
+             / 1048576.0));
+    PrintWarnings();
+    fprintf(stdout, "------------------------------------------------\n");
+  }
+
+  void PrintWarnings() {
+#if defined(__GNUC__) && !defined(__OPTIMIZE__)
+    fprintf(stdout,
+            "WARNING: Optimization is disabled: benchmarks unnecessarily slow\n"
+            );
+#endif
+#ifndef NDEBUG
+    fprintf(stdout,
+            "WARNING: Assertions are enabled; benchmarks unnecessarily slow\n");
+#endif
+
+    // See if snappy is working by attempting to compress a compressible string
+    const char text[] = "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+    std::string compressed;
+    if (!port::Snappy_Compress(text, sizeof(text), &compressed)) {
+      fprintf(stdout, "WARNING: Snappy compression is not enabled\n");
+    } else if (compressed.size() >= sizeof(text)) {
+      fprintf(stdout, "WARNING: Snappy compression is not effective\n");
+    }
+  }
+
+  void PrintEnvironment() {
+    fprintf(stderr, "LevelDB:    version %d.%d\n",
+            kMajorVersion, kMinorVersion);
+
+#if defined(__linux)
+    time_t now = time(NULL);
+    fprintf(stderr, "Date:       %s", ctime(&now));  // ctime() adds newline
+
+    FILE* cpuinfo = fopen("/proc/cpuinfo", "r");
+    if (cpuinfo != NULL) {
+      char line[1000];
+      int num_cpus = 0;
+      std::string cpu_ty
