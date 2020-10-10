@@ -374,4 +374,157 @@ TEST(LogTest, BadLength) {
 TEST(LogTest, BadLengthAtEndIsIgnored) {
   Write("foo");
   ShrinkSize(1);
-  ASSERT_EQ("EOF", Rea
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ(0, DroppedBytes());
+  ASSERT_EQ("", ReportMessage());
+}
+
+TEST(LogTest, ChecksumMismatch) {
+  Write("foo");
+  IncrementByte(0, 10);
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ(10, DroppedBytes());
+  ASSERT_EQ("OK", MatchError("checksum mismatch"));
+}
+
+TEST(LogTest, UnexpectedMiddleType) {
+  Write("foo");
+  SetByte(6, kMiddleType);
+  FixChecksum(0, 3);
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ(3, DroppedBytes());
+  ASSERT_EQ("OK", MatchError("missing start"));
+}
+
+TEST(LogTest, UnexpectedLastType) {
+  Write("foo");
+  SetByte(6, kLastType);
+  FixChecksum(0, 3);
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ(3, DroppedBytes());
+  ASSERT_EQ("OK", MatchError("missing start"));
+}
+
+TEST(LogTest, UnexpectedFullType) {
+  Write("foo");
+  Write("bar");
+  SetByte(6, kFirstType);
+  FixChecksum(0, 3);
+  ASSERT_EQ("bar", Read());
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ(3, DroppedBytes());
+  ASSERT_EQ("OK", MatchError("partial record without end"));
+}
+
+TEST(LogTest, UnexpectedFirstType) {
+  Write("foo");
+  Write(BigString("bar", 100000));
+  SetByte(6, kFirstType);
+  FixChecksum(0, 3);
+  ASSERT_EQ(BigString("bar", 100000), Read());
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ(3, DroppedBytes());
+  ASSERT_EQ("OK", MatchError("partial record without end"));
+}
+
+TEST(LogTest, MissingLastIsIgnored) {
+  Write(BigString("bar", kBlockSize));
+  // Remove the LAST block, including header.
+  ShrinkSize(14);
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ("", ReportMessage());
+  ASSERT_EQ(0, DroppedBytes());
+}
+
+TEST(LogTest, PartialLastIsIgnored) {
+  Write(BigString("bar", kBlockSize));
+  // Cause a bad record length in the LAST block.
+  ShrinkSize(1);
+  ASSERT_EQ("EOF", Read());
+  ASSERT_EQ("", ReportMessage());
+  ASSERT_EQ(0, DroppedBytes());
+}
+
+TEST(LogTest, ErrorJoinsRecords) {
+  // Consider two fragmented records:
+  //    first(R1) last(R1) first(R2) last(R2)
+  // where the middle two fragments disappear.  We do not want
+  // first(R1),last(R2) to get joined and returned as a valid record.
+
+  // Write records that span two blocks
+  Write(BigString("foo", kBlockSize));
+  Write(BigString("bar", kBlockSize));
+  Write("correct");
+
+  // Wipe the middle block
+  for (int offset = kBlockSize; offset < 2*kBlockSize; offset++) {
+    SetByte(offset, 'x');
+  }
+
+  ASSERT_EQ("correct", Read());
+  ASSERT_EQ("EOF", Read());
+  const size_t dropped = DroppedBytes();
+  ASSERT_LE(dropped, 2*kBlockSize + 100);
+  ASSERT_GE(dropped, 2*kBlockSize);
+}
+
+TEST(LogTest, ReadStart) {
+  CheckInitialOffsetRecord(0, 0);
+}
+
+TEST(LogTest, ReadSecondOneOff) {
+  CheckInitialOffsetRecord(1, 1);
+}
+
+TEST(LogTest, ReadSecondTenThousand) {
+  CheckInitialOffsetRecord(10000, 1);
+}
+
+TEST(LogTest, ReadSecondStart) {
+  CheckInitialOffsetRecord(10007, 1);
+}
+
+TEST(LogTest, ReadThirdOneOff) {
+  CheckInitialOffsetRecord(10008, 2);
+}
+
+TEST(LogTest, ReadThirdStart) {
+  CheckInitialOffsetRecord(20014, 2);
+}
+
+TEST(LogTest, ReadFourthOneOff) {
+  CheckInitialOffsetRecord(20015, 3);
+}
+
+TEST(LogTest, ReadFourthFirstBlockTrailer) {
+  CheckInitialOffsetRecord(log::kBlockSize - 4, 3);
+}
+
+TEST(LogTest, ReadFourthMiddleBlock) {
+  CheckInitialOffsetRecord(log::kBlockSize + 1, 3);
+}
+
+TEST(LogTest, ReadFourthLastBlock) {
+  CheckInitialOffsetRecord(2 * log::kBlockSize + 1, 3);
+}
+
+TEST(LogTest, ReadFourthStart) {
+  CheckInitialOffsetRecord(
+      2 * (kHeaderSize + 1000) + (2 * log::kBlockSize - 1000) + 3 * kHeaderSize,
+      3);
+}
+
+TEST(LogTest, ReadEnd) {
+  CheckOffsetPastEndReturnsNoRecords(0);
+}
+
+TEST(LogTest, ReadPastEnd) {
+  CheckOffsetPastEndReturnsNoRecords(5);
+}
+
+}  // namespace log
+}  // namespace leveldb
+
+int main(int argc, char** argv) {
+  return leveldb::test::RunAllTests();
+}
