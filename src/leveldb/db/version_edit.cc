@@ -250,4 +250,17 @@ std::string VersionEdit::DebugString() const {
     const FileMetaData& f = new_files_[i].second;
     r.append("\n  AddFile: ");
     AppendNumberTo(&r, new_files_[i].first);
-    r.ap
+    r.append(" ");
+    AppendNumberTo(&r, f.number);
+    r.append(" ");
+    AppendNumberTo(&r, f.file_size);
+    r.append(" ");
+    r.append(f.smallest.DebugString());
+    r.append(" .. ");
+    r.append(f.largest.DebugString());
+  }
+  r.append("\n}\n");
+  return r;
+}
+
+}  // namespace leveldb
