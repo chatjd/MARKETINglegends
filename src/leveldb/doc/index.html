@@ -1,0 +1,106 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" type="text/css" href="doc.css" />
+<title>Leveldb</title>
+</head>
+
+<body>
+<h1>Leveldb</h1>
+<address>Jeff Dean, Sanjay Ghemawat</address>
+<p>
+The <code>leveldb</code> library provides a persistent key value store.  Keys and
+values are arbitrary byte arrays.  The keys are ordered within the key
+value store according to a user-specified comparator function.
+
+<p>
+<h1>Opening A Database</h1>
+<p>
+A <code>leveldb</code> database has a name which corresponds to a file system
+directory.  All of the contents of database are stored in this
+directory.  The following example shows how to open a database,
+creating it if necessary:
+<p>
+<pre>
+  #include &lt;assert&gt;
+  #include "leveldb/db.h"
+
+  leveldb::DB* db;
+  leveldb::Options options;
+  options.create_if_missing = true;
+  leveldb::Status status = leveldb::DB::Open(options, "/tmp/testdb", &amp;db);
+  assert(status.ok());
+  ...
+</pre>
+If you want to raise an error if the database already exists, add
+the following line before the <code>leveldb::DB::Open</code> call:
+<pre>
+  options.error_if_exists = true;
+</pre>
+<h1>Status</h1>
+<p>
+You may have noticed the <code>leveldb::Status</code> type above.  Values of this
+type are returned by most functions in <code>leveldb</code> that may encounter an
+error.  You can check if such a result is ok, and also print an
+associated error message:
+<p>
+<pre>
+   leveldb::Status s = ...;
+   if (!s.ok()) cerr &lt;&lt; s.ToString() &lt;&lt; endl;
+</pre>
+<h1>Closing A Database</h1>
+<p>
+When you are done with a database, just delete the database object.
+Example:
+<p>
+<pre>
+  ... open the db as described above ...
+  ... do something with db ...
+  delete db;
+</pre>
+<h1>Reads And Writes</h1>
+<p>
+The database provides <code>Put</code>, <code>Delete</code>, and <code>Get</code> methods to
+modify/query the database.  For example, the following code
+moves the value stored under key1 to key2.
+<pre>
+  std::string value;
+  leveldb::Status s = db-&gt;Get(leveldb::ReadOptions(), key1, &amp;value);
+  if (s.ok()) s = db-&gt;Put(leveldb::WriteOptions(), key2, value);
+  if (s.ok()) s = db-&gt;Delete(leveldb::WriteOptions(), key1);
+</pre>
+
+<h1>Atomic Updates</h1>
+<p>
+Note that if the process dies after the Put of key2 but before the
+delete of key1, the same value may be left stored under multiple keys.
+Such problems can be avoided by using the <code>WriteBatch</code> class to
+atomically apply a set of updates:
+<p>
+<pre>
+  #include "leveldb/write_batch.h"
+  ...
+  std::string value;
+  leveldb::Status s = db-&gt;Get(leveldb::ReadOptions(), key1, &amp;value);
+  if (s.ok()) {
+    leveldb::WriteBatch batch;
+    batch.Delete(key1);
+    batch.Put(key2, value);
+    s = db-&gt;Write(leveldb::WriteOptions(), &amp;batch);
+  }
+</pre>
+The <code>WriteBatch</code> holds a sequence of edits to be made to the database,
+and these edits within the batch are applied in order.  Note that we
+called <code>Delete</code> before <code>Put</code> so that if <code>key1</code> is identical to <code>key2</code>,
+we do not end up erroneously dropping the value entirely.
+<p>
+Apart from its atomicity benefits, <code>WriteBatch</code> may also be used to
+speed up bulk updates by placing lots of individual mutations into the
+same batch.
+
+<h1>Synchronous Writes</h1>
+By default, each write to <code>leveldb</code> is asynchronous: it
+returns after pushing the write from the process into the operating
+system.  The transfer from operating system memory to the underlying
+persistent storage happens asynchronously.  The <code>sync</code> flag
