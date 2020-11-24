@@ -20,4 +20,6 @@ namespace leveldb {
 // file, or if the file cannot be read.
 Status DumpFile(Env* env, const std::string& fname, WritableFile* dst);
 
-}  // namespace leve
+}  // namespace leveldb
+
+#endif  // STORAGE_LEVELDB_INCLUDE_DUMPFILE_H_
