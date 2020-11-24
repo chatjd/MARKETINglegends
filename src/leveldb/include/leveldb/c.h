@@ -198,4 +198,93 @@ extern void leveldb_options_set_write_buffer_size(leveldb_options_t*, size_t);
 extern void leveldb_options_set_max_open_files(leveldb_options_t*, int);
 extern void leveldb_options_set_cache(leveldb_options_t*, leveldb_cache_t*);
 extern void leveldb_options_set_block_size(leveldb_options_t*, size_t);
-extern void leveldb_options_set
+extern void leveldb_options_set_block_restart_interval(leveldb_options_t*, int);
+
+enum {
+  leveldb_no_compression = 0,
+  leveldb_snappy_compression = 1
+};
+extern void leveldb_options_set_compression(leveldb_options_t*, int);
+
+/* Comparator */
+
+extern leveldb_comparator_t* leveldb_comparator_create(
+    void* state,
+    void (*destructor)(void*),
+    int (*compare)(
+        void*,
+        const char* a, size_t alen,
+        const char* b, size_t blen),
+    const char* (*name)(void*));
+extern void leveldb_comparator_destroy(leveldb_comparator_t*);
+
+/* Filter policy */
+
+extern leveldb_filterpolicy_t* leveldb_filterpolicy_create(
+    void* state,
+    void (*destructor)(void*),
+    char* (*create_filter)(
+        void*,
+        const char* const* key_array, const size_t* key_length_array,
+        int num_keys,
+        size_t* filter_length),
+    unsigned char (*key_may_match)(
+        void*,
+        const char* key, size_t length,
+        const char* filter, size_t filter_length),
+    const char* (*name)(void*));
+extern void leveldb_filterpolicy_destroy(leveldb_filterpolicy_t*);
+
+extern leveldb_filterpolicy_t* leveldb_filterpolicy_create_bloom(
+    int bits_per_key);
+
+/* Read options */
+
+extern leveldb_readoptions_t* leveldb_readoptions_create();
+extern void leveldb_readoptions_destroy(leveldb_readoptions_t*);
+extern void leveldb_readoptions_set_verify_checksums(
+    leveldb_readoptions_t*,
+    unsigned char);
+extern void leveldb_readoptions_set_fill_cache(
+    leveldb_readoptions_t*, unsigned char);
+extern void leveldb_readoptions_set_snapshot(
+    leveldb_readoptions_t*,
+    const leveldb_snapshot_t*);
+
+/* Write options */
+
+extern leveldb_writeoptions_t* leveldb_writeoptions_create();
+extern void leveldb_writeoptions_destroy(leveldb_writeoptions_t*);
+extern void leveldb_writeoptions_set_sync(
+    leveldb_writeoptions_t*, unsigned char);
+
+/* Cache */
+
+extern leveldb_cache_t* leveldb_cache_create_lru(size_t capacity);
+extern void leveldb_cache_destroy(leveldb_cache_t* cache);
+
+/* Env */
+
+extern leveldb_env_t* leveldb_create_default_env();
+extern void leveldb_env_destroy(leveldb_env_t*);
+
+/* Utility */
+
+/* Calls free(ptr).
+   REQUIRES: ptr was malloc()-ed and returned by one of the routines
+   in this file.  Note that in certain cases (typically on Windows), you
+   may need to call this routine instead of free(ptr) to dispose of
+   malloc()-ed memory returned by this library. */
+extern void leveldb_free(void* ptr);
+
+/* Return the major version number for this release. */
+extern int leveldb_major_version();
+
+/* Return the minor version number for this release. */
+extern int leveldb_minor_version();
+
+#ifdef __cplusplus
+}  /* end extern "C" */
+#endif
+
+#endif  /* STORAGE_LEVELDB_INCLUDE_C_H_ */
