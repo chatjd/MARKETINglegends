@@ -148,3 +148,186 @@ class Env {
  private:
   // No copying allowed
   Env(const Env&);
+  void operator=(const Env&);
+};
+
+// A file abstraction for reading sequentially through a file
+class SequentialFile {
+ public:
+  SequentialFile() { }
+  virtual ~SequentialFile();
+
+  // Read up to "n" bytes from the file.  "scratch[0..n-1]" may be
+  // written by this routine.  Sets "*result" to the data that was
+  // read (including if fewer than "n" bytes were successfully read).
+  // May set "*result" to point at data in "scratch[0..n-1]", so
+  // "scratch[0..n-1]" must be live when "*result" is used.
+  // If an error was encountered, returns a non-OK status.
+  //
+  // REQUIRES: External synchronization
+  virtual Status Read(size_t n, Slice* result, char* scratch) = 0;
+
+  // Skip "n" bytes from the file. This is guaranteed to be no
+  // slower that reading the same data, but may be faster.
+  //
+  // If end of file is reached, skipping will stop at the end of the
+  // file, and Skip will return OK.
+  //
+  // REQUIRES: External synchronization
+  virtual Status Skip(uint64_t n) = 0;
+
+ private:
+  // No copying allowed
+  SequentialFile(const SequentialFile&);
+  void operator=(const SequentialFile&);
+};
+
+// A file abstraction for randomly reading the contents of a file.
+class RandomAccessFile {
+ public:
+  RandomAccessFile() { }
+  virtual ~RandomAccessFile();
+
+  // Read up to "n" bytes from the file starting at "offset".
+  // "scratch[0..n-1]" may be written by this routine.  Sets "*result"
+  // to the data that was read (including if fewer than "n" bytes were
+  // successfully read).  May set "*result" to point at data in
+  // "scratch[0..n-1]", so "scratch[0..n-1]" must be live when
+  // "*result" is used.  If an error was encountered, returns a non-OK
+  // status.
+  //
+  // Safe for concurrent use by multiple threads.
+  virtual Status Read(uint64_t offset, size_t n, Slice* result,
+                      char* scratch) const = 0;
+
+ private:
+  // No copying allowed
+  RandomAccessFile(const RandomAccessFile&);
+  void operator=(const RandomAccessFile&);
+};
+
+// A file abstraction for sequential writing.  The implementation
+// must provide buffering since callers may append small fragments
+// at a time to the file.
+class WritableFile {
+ public:
+  WritableFile() { }
+  virtual ~WritableFile();
+
+  virtual Status Append(const Slice& data) = 0;
+  virtual Status Close() = 0;
+  virtual Status Flush() = 0;
+  virtual Status Sync() = 0;
+
+ private:
+  // No copying allowed
+  WritableFile(const WritableFile&);
+  void operator=(const WritableFile&);
+};
+
+// An interface for writing log messages.
+class Logger {
+ public:
+  Logger() { }
+  virtual ~Logger();
+
+  // Write an entry to the log file with the specified format.
+  virtual void Logv(const char* format, va_list ap) = 0;
+
+ private:
+  // No copying allowed
+  Logger(const Logger&);
+  void operator=(const Logger&);
+};
+
+
+// Identifies a locked file.
+class FileLock {
+ public:
+  FileLock() { }
+  virtual ~FileLock();
+ private:
+  // No copying allowed
+  FileLock(const FileLock&);
+  void operator=(const FileLock&);
+};
+
+// Log the specified data to *info_log if info_log is non-NULL.
+extern void Log(Logger* info_log, const char* format, ...)
+#   if defined(__GNUC__) || defined(__clang__)
+    __attribute__((__format__ (__printf__, 2, 3)))
+#   endif
+    ;
+
+// A utility routine: write "data" to the named file.
+extern Status WriteStringToFile(Env* env, const Slice& data,
+                                const std::string& fname);
+
+// A utility routine: read contents of named file into *data
+extern Status ReadFileToString(Env* env, const std::string& fname,
+                               std::string* data);
+
+// An implementation of Env that forwards all calls to another Env.
+// May be useful to clients who wish to override just part of the
+// functionality of another Env.
+class EnvWrapper : public Env {
+ public:
+  // Initialize an EnvWrapper that delegates all calls to *t
+  explicit EnvWrapper(Env* t) : target_(t) { }
+  virtual ~EnvWrapper();
+
+  // Return the target to which this Env forwards all calls
+  Env* target() const { return target_; }
+
+  // The following text is boilerplate that forwards all methods to target()
+  Status NewSequentialFile(const std::string& f, SequentialFile** r) {
+    return target_->NewSequentialFile(f, r);
+  }
+  Status NewRandomAccessFile(const std::string& f, RandomAccessFile** r) {
+    return target_->NewRandomAccessFile(f, r);
+  }
+  Status NewWritableFile(const std::string& f, WritableFile** r) {
+    return target_->NewWritableFile(f, r);
+  }
+  bool FileExists(const std::string& f) { return target_->FileExists(f); }
+  Status GetChildren(const std::string& dir, std::vector<std::string>* r) {
+    return target_->GetChildren(dir, r);
+  }
+  Status DeleteFile(const std::string& f) { return target_->DeleteFile(f); }
+  Status CreateDir(const std::string& d) { return target_->CreateDir(d); }
+  Status DeleteDir(const std::string& d) { return target_->DeleteDir(d); }
+  Status GetFileSize(const std::string& f, uint64_t* s) {
+    return target_->GetFileSize(f, s);
+  }
+  Status RenameFile(const std::string& s, const std::string& t) {
+    return target_->RenameFile(s, t);
+  }
+  Status LockFile(const std::string& f, FileLock** l) {
+    return target_->LockFile(f, l);
+  }
+  Status UnlockFile(FileLock* l) { return target_->UnlockFile(l); }
+  void Schedule(void (*f)(void*), void* a) {
+    return target_->Schedule(f, a);
+  }
+  void StartThread(void (*f)(void*), void* a) {
+    return target_->StartThread(f, a);
+  }
+  virtual Status GetTestDirectory(std::string* path) {
+    return target_->GetTestDirectory(path);
+  }
+  virtual Status NewLogger(const std::string& fname, Logger** result) {
+    return target_->NewLogger(fname, result);
+  }
+  uint64_t NowMicros() {
+    return target_->NowMicros();
+  }
+  void SleepForMicroseconds(int micros) {
+    target_->SleepForMicroseconds(micros);
+  }
+ private:
+  Env* target_;
+};
+
+}  // namespace leveldb
+
+#endif  // STORAGE_LEVELDB_INCLUDE_ENV_H_
