@@ -47,4 +47,39 @@ class Table {
   // call one of the Seek methods on the iterator before using it).
   Iterator* NewIterator(const ReadOptions&) const;
 
-  // Given a key, return an app
+  // Given a key, return an approximate byte offset in the file where
+  // the data for that key begins (or would begin if the key were
+  // present in the file).  The returned value is in terms of file
+  // bytes, and so includes effects like compression of the underlying data.
+  // E.g., the approximate offset of the last key in the table will
+  // be close to the file length.
+  uint64_t ApproximateOffsetOf(const Slice& key) const;
+
+ private:
+  struct Rep;
+  Rep* rep_;
+
+  explicit Table(Rep* rep) { rep_ = rep; }
+  static Iterator* BlockReader(void*, const ReadOptions&, const Slice&);
+
+  // Calls (*handle_result)(arg, ...) with the entry found after a call
+  // to Seek(key).  May not make such a call if filter policy says
+  // that key is not present.
+  friend class TableCache;
+  Status InternalGet(
+      const ReadOptions&, const Slice& key,
+      void* arg,
+      void (*handle_result)(void* arg, const Slice& k, const Slice& v));
+
+
+  void ReadMeta(const Footer& footer);
+  void ReadFilter(const Slice& filter_handle_value);
+
+  // No copying allowed
+  Table(const Table&);
+  void operator=(const Table&);
+};
+
+}  // namespace leveldb
+
+#endif  // STORAGE_LEVELDB_INCLUDE_TABLE_H_
