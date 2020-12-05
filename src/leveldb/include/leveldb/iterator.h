@@ -86,3 +86,16 @@ class Iterator {
   Cleanup cleanup_;
 
   // No copying allowed
+  Iterator(const Iterator&);
+  void operator=(const Iterator&);
+};
+
+// Return an empty iterator (yields nothing).
+extern Iterator* NewEmptyIterator();
+
+// Return an empty iterator with the specified status.
+extern Iterator* NewErrorIterator(const Status& status);
+
+}  // namespace leveldb
+
+#endif  // STORAGE_LEVELDB_INCLUDE_ITERATOR_H_
