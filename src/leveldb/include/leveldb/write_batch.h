@@ -52,4 +52,13 @@ class WriteBatch {
   Status Iterate(Handler* handler) const;
 
  private:
-  friend class Write
+  friend class WriteBatchInternal;
+
+  std::string rep_;  // See comment in write_batch.cc for the format of rep_
+
+  // Intentionally copyable
+};
+
+}  // namespace leveldb
+
+#endif  // STORAGE_LEVELDB_INCLUDE_WRITE_BATCH_H_
