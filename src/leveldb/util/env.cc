@@ -81,4 +81,16 @@ Status ReadFileToString(Env* env, const std::string& fname, std::string* data) {
       break;
     }
     data->append(fragment.data(), fragment.size());
-    
+    if (fragment.empty()) {
+      break;
+    }
+  }
+  delete[] space;
+  delete file;
+  return s;
+}
+
+EnvWrapper::~EnvWrapper() {
+}
+
+}  // namespace leveldb
