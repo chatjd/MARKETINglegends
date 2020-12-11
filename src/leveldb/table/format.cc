@@ -126,4 +126,20 @@ Status ReadBlock(RandomAccessFile* file,
       if (!port::Snappy_Uncompress(data, n, ubuf)) {
         delete[] buf;
         delete[] ubuf;
-        retur
+        return Status::Corruption("corrupted compressed block contents");
+      }
+      delete[] buf;
+      result->data = Slice(ubuf, ulength);
+      result->heap_allocated = true;
+      result->cachable = true;
+      break;
+    }
+    default:
+      delete[] buf;
+      return Status::Corruption("bad block type");
+  }
+
+  return Status::OK();
+}
+
+}  // namespace leveldb
