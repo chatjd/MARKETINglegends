@@ -7218,3 +7218,59 @@ bool SendMessages(CNode* pto, bool fSendTrickle)
         }
         if (!vGetData.empty())
             pto->PushMessage("getdata", vGetData);
+
+    }
+    return true;
+}
+
+ std::string CBlockFileInfo::ToString() const {
+     return strprintf("CBlockFileInfo(blocks=%u, size=%u, heights=%u...%u, time=%s...%s)", nBlocks, nSize, nHeightFirst, nHeightLast, DateTimeStrFormat("%Y-%m-%d", nTimeFirst), DateTimeStrFormat("%Y-%m-%d", nTimeLast));
+ }
+
+
+
+static class CMainCleanup
+{
+public:
+    CMainCleanup() {}
+    ~CMainCleanup() {
+        // block headers
+        BlockMap::iterator it1 = mapBlockIndex.begin();
+        for (; it1 != mapBlockIndex.end(); it1++)
+            delete (*it1).second;
+        mapBlockIndex.clear();
+
+        // orphan transactions
+        mapOrphanTransactions.clear();
+        mapOrphanTransactionsByPrev.clear();
+    }
+} instance_of_cmaincleanup;
+
+
+// Set default values of new CMutableTransaction based on consensus rules at given height.
+CMutableTransaction CreateNewContextualCMutableTransaction(const Consensus::Params& consensusParams, int nHeight)
+{
+    CMutableTransaction mtx;
+
+    bool isOverwintered = NetworkUpgradeActive(nHeight, consensusParams, Consensus::UPGRADE_OVERWINTER);
+    if (isOverwintered) {
+        mtx.fOverwintered = true;
+        mtx.nExpiryHeight = nHeight + expiryDelta;
+
+        // NOTE: If the expiry height crosses into an incompatible consensus epoch, and it is changed to the last block
+        // of the current epoch (see below: Overwinter->Sapling), the transaction will be rejected if it falls within
+        // the expiring soon threshold of 3 blocks (for DoS mitigation) based on the current height.
+        // TODO: Generalise this code so behaviour applies to all post-Overwinter epochs
+        if (NetworkUpgradeActive(nHeight, consensusParams, Consensus::UPGRADE_SAPLING)) {
+            mtx.nVersionGroupId = SAPLING_VERSION_GROUP_ID;
+            mtx.nVersion = SAPLING_TX_VERSION;
+        } else {
+            mtx.nVersionGroupId = OVERWINTER_VERSION_GROUP_ID;
+            mtx.nVersion = OVERWINTER_TX_VERSION;
+            mtx.nExpiryHeight = std::min(
+                mtx.nExpiryHeight,
+                static_cast<uint32_t>(consensusParams.vUpgrades[Consensus::UPGRADE_SAPLING].nActivationHeight - 1));
+        }
+    }
+    return mtx;
+}
