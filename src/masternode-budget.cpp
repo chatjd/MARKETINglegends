@@ -447,4 +447,166 @@ void CBudgetManager::CheckAndRemove()
         CFinalizedBudget* pfinalizedBudget = &((*it).second);
 
         pfinalizedBudget->fValid = pfinalizedBudget->IsValid(strError);
- 
+        if (!strError.empty ()) {
+            LogPrint("masternode","CBudgetManager::CheckAndRemove - Invalid finalized budget: %s\n", strError);
+        }
+        else {
+            LogPrint("masternode","CBudgetManager::CheckAndRemove - Found valid finalized budget: %s %s\n",
+                      pfinalizedBudget->strBudgetName.c_str(), pfinalizedBudget->nFeeTXHash.ToString().c_str());
+        }
+
+        if (pfinalizedBudget->fValid) {
+            pfinalizedBudget->AutoCheck();
+            // tmpMapFinalizedBudgets.insert(make_pair(pfinalizedBudget->GetHash(), *pfinalizedBudget));
+        }
+
+        ++it;
+    }
+
+    LogPrint("mnbudget", "CBudgetManager::CheckAndRemove - mapProposals cleanup - size before: %d\n", mapProposals.size());
+    std::map<uint256, CBudgetProposal>::iterator it2 = mapProposals.begin();
+    while (it2 != mapProposals.end()) {
+        CBudgetProposal* pbudgetProposal = &((*it2).second);
+        pbudgetProposal->fValid = pbudgetProposal->IsValid(strError);
+        if (!strError.empty ()) {
+            LogPrint("masternode","CBudgetManager::CheckAndRemove - Invalid budget proposal - %s\n", strError);
+            strError = "";
+        }
+        else {
+             LogPrint("masternode","CBudgetManager::CheckAndRemove - Found valid budget proposal: %s %s\n",
+                      pbudgetProposal->strProposalName.c_str(), pbudgetProposal->nFeeTXHash.ToString().c_str());
+        }
+        if (pbudgetProposal->fValid) {
+            // tmpMapProposals.insert(make_pair(pbudgetProposal->GetHash(), *pbudgetProposal));
+        }
+
+        ++it2;
+    }
+    // Remove invalid entries by overwriting complete map
+    // mapFinalizedBudgets = tmpMapFinalizedBudgets;
+    // mapProposals = tmpMapProposals;
+
+    // LogPrint("mnbudget", "CBudgetManager::CheckAndRemove - mapFinalizedBudgets cleanup - size after: %d\n", mapFinalizedBudgets.size());
+    // LogPrint("mnbudget", "CBudgetManager::CheckAndRemove - mapProposals cleanup - size after: %d\n", mapProposals.size());
+    LogPrint("masternode","CBudgetManager::CheckAndRemove - PASSED\n");
+
+}
+
+void CBudgetManager::FillBlockPayee(CMutableTransaction& txNew, CAmount nFees)
+{
+    LOCK(cs);
+
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    if (!pindexPrev) return;
+
+    int nHighestCount = 0;
+    CScript payee;
+    CAmount nAmount = 0;
+
+    // ------- Grab The Highest Count
+
+    std::map<uint256, CFinalizedBudget>::iterator it = mapFinalizedBudgets.begin();
+    while (it != mapFinalizedBudgets.end()) {
+        CFinalizedBudget* pfinalizedBudget = &((*it).second);
+        if (pfinalizedBudget->GetVoteCount() > nHighestCount &&
+            pindexPrev->nHeight + 1 >= pfinalizedBudget->GetBlockStart() &&
+            pindexPrev->nHeight + 1 <= pfinalizedBudget->GetBlockEnd() &&
+            pfinalizedBudget->GetPayeeAndAmount(pindexPrev->nHeight + 1, payee, nAmount)) {
+            nHighestCount = pfinalizedBudget->GetVoteCount();
+        }
+
+        ++it;
+    }
+
+    CAmount blockValue = GetBlockSubsidy(pindexPrev->nHeight + 1, Params().GetConsensus());
+
+    //miners get the full amount on these blocks
+    txNew.vout[0].nValue = blockValue;
+
+    if (pindexPrev->nHeight + 1 >= Params().GetConsensus().vUpgrades[Consensus::UPGRADE_OVERWINTER].nActivationHeight) {
+        if ((pindexPrev->nHeight + 1 > 0) && (pindexPrev->nHeight + 1 <= Params().GetConsensus().GetLastVRewardSystemBlockHeight())) {
+            // Vidulum Rewards System
+            CAmount vVRewardSystem = blockValue * 20 / 100;
+            //vVRewardSystem = txNew.vout[0].nValue / 20;
+
+            // Take some reward away from us
+            txNew.vout[0].nValue -= vVRewardSystem;
+
+            // And give it to the Vidulum Rewards System
+            txNew.vout.push_back(CTxOut(vVRewardSystem, Params().GetVRewardSystemScriptAtHeight(pindexPrev->nHeight + 1)));
+        }
+    }
+
+    if(nHighestCount > 0){
+        txNew.vout[0].nValue -= nAmount;
+
+        txNew.vout.push_back(CTxOut(nAmount, payee));
+
+        CTxDestination address1;
+        ExtractDestination(payee, address1);
+
+        LogPrintf("Masternode payment to %s\n", EncodeDestination(address1));
+    }
+}
+
+CFinalizedBudget* CBudgetManager::FindFinalizedBudget(uint256 nHash)
+{
+    if (mapFinalizedBudgets.count(nHash))
+        return &mapFinalizedBudgets[nHash];
+
+    return NULL;
+}
+
+CBudgetProposal* CBudgetManager::FindProposal(const std::string& strProposalName)
+{
+    //find the prop with the highest yes count
+
+    int nYesCount = -99999;
+    CBudgetProposal* pbudgetProposal = NULL;
+
+    std::map<uint256, CBudgetProposal>::iterator it = mapProposals.begin();
+    while (it != mapProposals.end()) {
+        if ((*it).second.strProposalName == strProposalName && (*it).second.GetYeas() > nYesCount) {
+            pbudgetProposal = &((*it).second);
+            nYesCount = pbudgetProposal->GetYeas();
+        }
+        ++it;
+    }
+
+    if (nYesCount == -99999) return NULL;
+
+    return pbudgetProposal;
+}
+
+CBudgetProposal* CBudgetManager::FindProposal(uint256 nHash)
+{
+    LOCK(cs);
+
+    if (mapProposals.count(nHash))
+        return &mapProposals[nHash];
+
+    return NULL;
+}
+
+bool CBudgetManager::IsBudgetPaymentBlock(int nBlockHeight)
+{
+    int nHighestCount = -1;
+    int nFivePercent = mnodeman.CountEnabled(ActiveProtocol()) / 20;
+
+    std::map<uint256, CFinalizedBudget>::iterator it = mapFinalizedBudgets.begin();
+    while (it != mapFinalizedBudgets.end()) {
+        CFinalizedBudget* pfinalizedBudget = &((*it).second);
+        if (pfinalizedBudget->GetVoteCount() > nHighestCount &&
+            nBlockHeight >= pfinalizedBudget->GetBlockStart() &&
+            nBlockHeight <= pfinalizedBudget->GetBlockEnd()) {
+            nHighestCount = pfinalizedBudget->GetVoteCount();
+        }
+
+        ++it;
+    }
+
+    LogPrint("masternode","CBudgetManager::IsBudgetPaymentBlock() - nHighestCount: %lli, 5%% of Masternodes: %lli. Number of budgets: %lli\n", 
+              nHighestCount, nFivePercent, mapFinalizedBudgets.size());
+
+    // If budget doesn't have 5% of the network votes, then we should pay a masternode instead
+    if (n
