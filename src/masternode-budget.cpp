@@ -609,4 +609,150 @@ bool CBudgetManager::IsBudgetPaymentBlock(int nBlockHeight)
               nHighestCount, nFivePercent, mapFinalizedBudgets.size());
 
     // If budget doesn't have 5% of the network votes, then we should pay a masternode instead
-    if (n
+    if (nHighestCount > nFivePercent) return true;
+
+    return false;
+}
+
+bool CBudgetManager::IsTransactionValid(const CTransaction& txNew, int nBlockHeight)
+{
+    LOCK(cs);
+
+    int nHighestCount = 0;
+    int nFivePercent = mnodeman.CountEnabled(ActiveProtocol()) / 20;
+    std::vector<CFinalizedBudget*> ret;
+
+    // ------- Grab The Highest Count
+
+    std::map<uint256, CFinalizedBudget>::iterator it = mapFinalizedBudgets.begin();
+    while (it != mapFinalizedBudgets.end()) {
+        CFinalizedBudget* pfinalizedBudget = &((*it).second);
+        if (pfinalizedBudget->GetVoteCount() > nHighestCount &&
+            nBlockHeight >= pfinalizedBudget->GetBlockStart() &&
+            nBlockHeight <= pfinalizedBudget->GetBlockEnd()) {
+            nHighestCount = pfinalizedBudget->GetVoteCount();
+        }
+
+        ++it;
+    }
+
+    LogPrint("masternode","CBudgetManager::IsTransactionValid() - nHighestCount: %lli, 5%% of Masternodes: %lli mapFinalizedBudgets.size(): %ld\n", 
+              nHighestCount, nFivePercent, mapFinalizedBudgets.size());
+    /*
+        If budget doesn't have 5% of the network votes, then we should pay a masternode instead
+    */
+    if (nHighestCount < nFivePercent) return false;
+
+    // check the highest finalized budgets (+/- 10% to assist in consensus)
+
+    it = mapFinalizedBudgets.begin();
+    while (it != mapFinalizedBudgets.end()) {
+        CFinalizedBudget* pfinalizedBudget = &((*it).second);
+
+        if (pfinalizedBudget->GetVoteCount() > nHighestCount - mnodeman.CountEnabled(ActiveProtocol()) / 10) {
+            if (nBlockHeight >= pfinalizedBudget->GetBlockStart() && nBlockHeight <= pfinalizedBudget->GetBlockEnd()) {
+                if (pfinalizedBudget->IsTransactionValid(txNew, nBlockHeight)) {
+                    return true;
+                }
+            }
+        }
+
+        ++it;
+    }
+
+    //we looked through all of the known budgets
+    return false;
+}
+
+std::vector<CBudgetProposal*> CBudgetManager::GetAllProposals()
+{
+    LOCK(cs);
+
+    std::vector<CBudgetProposal*> vBudgetProposalRet;
+
+    std::map<uint256, CBudgetProposal>::iterator it = mapProposals.begin();
+    while (it != mapProposals.end()) {
+        (*it).second.CleanAndRemove(false);
+
+        CBudgetProposal* pbudgetProposal = &((*it).second);
+        vBudgetProposalRet.push_back(pbudgetProposal);
+
+        ++it;
+    }
+
+    return vBudgetProposalRet;
+}
+
+//
+// Sort by votes, if there's a tie sort by their feeHash TX
+//
+struct sortProposalsByVotes {
+    bool operator()(const std::pair<CBudgetProposal*, int>& left, const std::pair<CBudgetProposal*, int>& right)
+    {
+        if (left.second != right.second)
+            return (left.second > right.second);
+        return (UintToArith256(left.first->nFeeTXHash) > UintToArith256(right.first->nFeeTXHash));
+    }
+};
+
+//Need to review this function
+std::vector<CBudgetProposal*> CBudgetManager::GetBudget()
+{
+    LOCK(cs);
+
+    // ------- Sort budgets by Yes Count
+
+    std::vector<std::pair<CBudgetProposal*, int> > vBudgetPorposalsSort;
+
+    std::map<uint256, CBudgetProposal>::iterator it = mapProposals.begin();
+    while (it != mapProposals.end()) {
+        (*it).second.CleanAndRemove(false);
+        vBudgetPorposalsSort.push_back(make_pair(&((*it).second), (*it).second.GetYeas() - (*it).second.GetNays()));
+        ++it;
+    }
+
+    std::sort(vBudgetPorposalsSort.begin(), vBudgetPorposalsSort.end(), sortProposalsByVotes());
+
+    // ------- Grab The Budgets In Order
+
+    std::vector<CBudgetProposal*> vBudgetProposalsRet;
+
+    CAmount nBudgetAllocated = 0;
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    if (pindexPrev == NULL) return vBudgetProposalsRet;
+
+    int nBlockStart = pindexPrev->nHeight - pindexPrev->nHeight % GetBudgetPaymentCycleBlocks() + GetBudgetPaymentCycleBlocks();
+    int nBlockEnd = nBlockStart + GetBudgetPaymentCycleBlocks() - 1;
+    CAmount nTotalBudget = GetTotalBudget(nBlockStart);
+
+
+    std::vector<std::pair<CBudgetProposal*, int> >::iterator it2 = vBudgetPorposalsSort.begin();
+    while (it2 != vBudgetPorposalsSort.end()) {
+        CBudgetProposal* pbudgetProposal = (*it2).first;
+
+        LogPrint("masternode","CBudgetManager::GetBudget() - Processing Budget %s\n", pbudgetProposal->strProposalName.c_str());
+        //prop start/end should be inside this period
+        if (pbudgetProposal->fValid && pbudgetProposal->nBlockStart <= nBlockStart &&
+            pbudgetProposal->nBlockEnd >= nBlockEnd &&
+            pbudgetProposal->GetYeas() - pbudgetProposal->GetNays() > mnodeman.CountEnabled(ActiveProtocol()) / 10 &&
+            pbudgetProposal->IsEstablished()) {
+
+            LogPrint("masternode","CBudgetManager::GetBudget() -   Check 1 passed: valid=%d | %ld <= %ld | %ld >= %ld | Yeas=%d Nays=%d Count=%d | established=%d\n",
+                      pbudgetProposal->fValid, pbudgetProposal->nBlockStart, nBlockStart, pbudgetProposal->nBlockEnd,
+                      nBlockEnd, pbudgetProposal->GetYeas(), pbudgetProposal->GetNays(), mnodeman.CountEnabled(ActiveProtocol()) / 10,
+                      pbudgetProposal->IsEstablished());
+
+            if (pbudgetProposal->GetAmount() + nBudgetAllocated <= nTotalBudget) {
+                pbudgetProposal->SetAllotted(pbudgetProposal->GetAmount());
+                nBudgetAllocated += pbudgetProposal->GetAmount();
+                vBudgetProposalsRet.push_back(pbudgetProposal);
+                LogPrint("masternode","CBudgetManager::GetBudget() -     Check 2 passed: Budget added\n");
+            } else {
+                pbudgetProposal->SetAllotted(0);
+                LogPrint("masternode","CBudgetManager::GetBudget() -     Check 2 failed: no amount allotted\n");
+            }
+        }
+        else {
+            LogPrint("masternode","CBudgetManager::GetBudget() -   Check 1 failed: valid=%d | %ld <= %ld | %ld >= %ld | Yeas=%d Nays=%d Count=%d | established=%d\n",
+                      pbudgetProposal->fValid, pbudgetProposal->nBlockStart, nBlockStart, pbudgetProposal->nBlockEnd,
+                      nBlockEnd, 
