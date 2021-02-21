@@ -926,4 +926,164 @@ void CBudgetManager::NewBlock()
     }
 
     LogPrint("masternode","CBudgetManager::NewBlock - vecImmatureFinalizedBudgets cleanup - size: %d\n", vecImmatureFinalizedBudgets.size());
-    std::vector<CFinalizedBudgetBroad
+    std::vector<CFinalizedBudgetBroadcast>::iterator it5 = vecImmatureFinalizedBudgets.begin();
+    while (it5 != vecImmatureFinalizedBudgets.end()) {
+        std::string strError = "";
+        int nConf = 0;
+        if (!IsBudgetCollateralValid((*it5).nFeeTXHash, (*it5).GetHash(), strError, (*it5).nTime, nConf)) {
+            ++it5;
+            continue;
+        }
+
+        if (!(*it5).IsValid(strError)) {
+            LogPrint("masternode","fbs (immature) - invalid finalized budget - %s\n", strError);
+            it5 = vecImmatureFinalizedBudgets.erase(it5);
+            continue;
+        }
+
+        LogPrint("masternode","fbs (immature) - new finalized budget - %s\n", (*it5).GetHash().ToString());
+
+        CFinalizedBudget finalizedBudget((*it5));
+        if (AddFinalizedBudget(finalizedBudget)) {
+            (*it5).Relay();
+        }
+
+        it5 = vecImmatureFinalizedBudgets.erase(it5);
+    }
+    LogPrint("masternode","CBudgetManager::NewBlock - PASSED\n");
+}
+
+void CBudgetManager::ProcessMessage(CNode* pfrom, std::string& strCommand, CDataStream& vRecv)
+{
+    // lite mode is not supported
+    if (fLiteMode) return;
+    if (!masternodeSync.IsBlockchainSynced()) return;
+
+    LOCK(cs_budget);
+
+    if (strCommand == "mnvs") { //Masternode vote sync
+        uint256 nProp;
+        vRecv >> nProp;
+
+        if (NetworkIdFromCommandLine() == CBaseChainParams::MAIN) {
+            if (nProp == uint256()) {
+                if (pfrom->HasFulfilledRequest("mnvs")) {
+                    LogPrint("masternode","mnvs - peer already asked me for the list\n");
+                    Misbehaving(pfrom->GetId(), 20);
+                    return;
+                }
+                pfrom->FulfilledRequest("mnvs");
+            }
+        }
+
+        Sync(pfrom, nProp);
+        LogPrint("mnbudget", "mnvs - Sent Masternode votes to peer %i\n", pfrom->GetId());
+    }
+
+    if (strCommand == "mprop") { //Masternode Proposal
+        CBudgetProposalBroadcast budgetProposalBroadcast;
+        vRecv >> budgetProposalBroadcast;
+
+        if (mapSeenMasternodeBudgetProposals.count(budgetProposalBroadcast.GetHash())) {
+            masternodeSync.AddedBudgetItem(budgetProposalBroadcast.GetHash());
+            return;
+        }
+
+        std::string strError = "";
+        int nConf = 0;
+        if (!IsBudgetCollateralValid(budgetProposalBroadcast.nFeeTXHash, budgetProposalBroadcast.GetHash(), strError, budgetProposalBroadcast.nTime, nConf)) {
+            LogPrint("masternode","Proposal FeeTX is not valid - %s - %s\n", budgetProposalBroadcast.nFeeTXHash.ToString(), strError);
+            if (nConf >= 1) vecImmatureBudgetProposals.push_back(budgetProposalBroadcast);
+            return;
+        }
+
+        mapSeenMasternodeBudgetProposals.insert(make_pair(budgetProposalBroadcast.GetHash(), budgetProposalBroadcast));
+
+        if (!budgetProposalBroadcast.IsValid(strError)) {
+            LogPrint("masternode","mprop - invalid budget proposal - %s\n", strError);
+            return;
+        }
+
+        CBudgetProposal budgetProposal(budgetProposalBroadcast);
+        if (AddProposal(budgetProposal)) {
+            budgetProposalBroadcast.Relay();
+        }
+        masternodeSync.AddedBudgetItem(budgetProposalBroadcast.GetHash());
+
+        LogPrint("masternode","mprop - new budget - %s\n", budgetProposalBroadcast.GetHash().ToString());
+
+        //We might have active votes for this proposal that are valid now
+        CheckOrphanVotes();
+    }
+
+    if (strCommand == "mvote") { //Masternode Vote
+        CBudgetVote vote;
+        vRecv >> vote;
+        vote.fValid = true;
+
+        if (mapSeenMasternodeBudgetVotes.count(vote.GetHash())) {
+            masternodeSync.AddedBudgetItem(vote.GetHash());
+            return;
+        }
+
+        CMasternode* pmn = mnodeman.Find(vote.vin);
+        if (pmn == NULL) {
+            LogPrint("masternode","mvote - unknown masternode - vin: %s\n", vote.vin.prevout.hash.ToString());
+            mnodeman.AskForMN(pfrom, vote.vin);
+            return;
+        }
+
+
+        mapSeenMasternodeBudgetVotes.insert(make_pair(vote.GetHash(), vote));
+        if (!vote.SignatureValid(true)) {
+            LogPrint("masternode","mvote - signature invalid\n");
+            if (masternodeSync.IsSynced())
+            {
+                Misbehaving(pfrom->GetId(), 20);
+            }
+            // it could just be a non-synced masternode
+            mnodeman.AskForMN(pfrom, vote.vin);
+            return;
+        }
+
+        std::string strError = "";
+        if (UpdateProposal(vote, pfrom, strError)) {
+            vote.Relay();
+            masternodeSync.AddedBudgetItem(vote.GetHash());
+        }
+
+        LogPrint("masternode","mvote - new budget vote for budget %s - %s\n", vote.nProposalHash.ToString(),  vote.GetHash().ToString());
+    }
+
+    if (strCommand == "fbs") { //Finalized Budget Suggestion
+        CFinalizedBudgetBroadcast finalizedBudgetBroadcast;
+        vRecv >> finalizedBudgetBroadcast;
+
+        if (mapSeenFinalizedBudgets.count(finalizedBudgetBroadcast.GetHash())) {
+            masternodeSync.AddedBudgetItem(finalizedBudgetBroadcast.GetHash());
+            return;
+        }
+
+        std::string strError = "";
+        int nConf = 0;
+        if (!IsBudgetCollateralValid(finalizedBudgetBroadcast.nFeeTXHash, finalizedBudgetBroadcast.GetHash(), strError, finalizedBudgetBroadcast.nTime, nConf)) {
+            LogPrint("masternode","Finalized Budget FeeTX is not valid - %s - %s\n", finalizedBudgetBroadcast.nFeeTXHash.ToString(), strError);
+
+            if (nConf >= 1) vecImmatureFinalizedBudgets.push_back(finalizedBudgetBroadcast);
+            return;
+        }
+
+        mapSeenFinalizedBudgets.insert(make_pair(finalizedBudgetBroadcast.GetHash(), finalizedBudgetBroadcast));
+
+        if (!finalizedBudgetBroadcast.IsValid(strError)) {
+            LogPrint("masternode","fbs - invalid finalized budget - %s\n", strError);
+            return;
+        }
+
+        LogPrint("masternode","fbs - new finalized budget - %s\n", finalizedBudgetBroadcast.GetHash().ToString());
+
+        CFinalizedBudget finalizedBudget(finalizedBudgetBroadcast);
+        if (AddFinalizedBudget(finalizedBudget)) {
+            finalizedBudgetBroadcast.Relay();
+        }
+        masternodeSync.AddedBudgetItem(finalizedBu
