@@ -1086,4 +1086,178 @@ void CBudgetManager::ProcessMessage(CNode* pfrom, std::string& strCommand, CData
         if (AddFinalizedBudget(finalizedBudget)) {
             finalizedBudgetBroadcast.Relay();
         }
-        masternodeSync.AddedBudgetItem(finalizedBu
+        masternodeSync.AddedBudgetItem(finalizedBudgetBroadcast.GetHash());
+
+        //we might have active votes for this budget that are now valid
+        CheckOrphanVotes();
+    }
+
+    if (strCommand == "fbvote") { //Finalized Budget Vote
+        CFinalizedBudgetVote vote;
+        vRecv >> vote;
+        vote.fValid = true;
+
+        if (mapSeenFinalizedBudgetVotes.count(vote.GetHash())) {
+            masternodeSync.AddedBudgetItem(vote.GetHash());
+            return;
+        }
+
+        CMasternode* pmn = mnodeman.Find(vote.vin);
+        if (pmn == NULL) {
+            LogPrint("mnbudget", "fbvote - unknown masternode - vin: %s\n", vote.vin.prevout.hash.ToString());
+            mnodeman.AskForMN(pfrom, vote.vin);
+            return;
+        }
+
+        mapSeenFinalizedBudgetVotes.insert(make_pair(vote.GetHash(), vote));
+        if (!vote.SignatureValid(true)) {
+            LogPrint("masternode","fbvote - signature invalid\n");
+            if (masternodeSync.IsSynced())
+            {
+                Misbehaving(pfrom->GetId(), 20);
+            }
+            // it could just be a non-synced masternode
+            mnodeman.AskForMN(pfrom, vote.vin);
+            return;
+        }
+
+        std::string strError = "";
+        if (UpdateFinalizedBudget(vote, pfrom, strError)) {
+            vote.Relay();
+            masternodeSync.AddedBudgetItem(vote.GetHash());
+
+            LogPrint("masternode","fbvote - new finalized budget vote - %s\n", vote.GetHash().ToString());
+        } else {
+            LogPrint("masternode","fbvote - rejected finalized budget vote - %s - %s\n", vote.GetHash().ToString(), strError);
+        }
+    }
+}
+
+bool CBudgetManager::PropExists(uint256 nHash)
+{
+    if (mapProposals.count(nHash)) return true;
+    return false;
+}
+
+//mark that a full sync is needed
+void CBudgetManager::ResetSync()
+{
+    LOCK(cs);
+
+
+    std::map<uint256, CBudgetProposalBroadcast>::iterator it1 = mapSeenMasternodeBudgetProposals.begin();
+    while (it1 != mapSeenMasternodeBudgetProposals.end()) {
+        CBudgetProposal* pbudgetProposal = FindProposal((*it1).first);
+        if (pbudgetProposal && pbudgetProposal->fValid) {
+            //mark votes
+            std::map<uint256, CBudgetVote>::iterator it2 = pbudgetProposal->mapVotes.begin();
+            while (it2 != pbudgetProposal->mapVotes.end()) {
+                (*it2).second.fSynced = false;
+                ++it2;
+            }
+        }
+        ++it1;
+    }
+
+    std::map<uint256, CFinalizedBudgetBroadcast>::iterator it3 = mapSeenFinalizedBudgets.begin();
+    while (it3 != mapSeenFinalizedBudgets.end()) {
+        CFinalizedBudget* pfinalizedBudget = FindFinalizedBudget((*it3).first);
+        if (pfinalizedBudget && pfinalizedBudget->fValid) {
+            //send votes
+            std::map<uint256, CFinalizedBudgetVote>::iterator it4 = pfinalizedBudget->mapVotes.begin();
+            while (it4 != pfinalizedBudget->mapVotes.end()) {
+                (*it4).second.fSynced = false;
+                ++it4;
+            }
+        }
+        ++it3;
+    }
+}
+
+void CBudgetManager::MarkSynced()
+{
+    LOCK(cs);
+
+    /*
+        Mark that we've sent all valid items
+    */
+
+    std::map<uint256, CBudgetProposalBroadcast>::iterator it1 = mapSeenMasternodeBudgetProposals.begin();
+    while (it1 != mapSeenMasternodeBudgetProposals.end()) {
+        CBudgetProposal* pbudgetProposal = FindProposal((*it1).first);
+        if (pbudgetProposal && pbudgetProposal->fValid) {
+            //mark votes
+            std::map<uint256, CBudgetVote>::iterator it2 = pbudgetProposal->mapVotes.begin();
+            while (it2 != pbudgetProposal->mapVotes.end()) {
+                if ((*it2).second.fValid)
+                    (*it2).second.fSynced = true;
+                ++it2;
+            }
+        }
+        ++it1;
+    }
+
+    std::map<uint256, CFinalizedBudgetBroadcast>::iterator it3 = mapSeenFinalizedBudgets.begin();
+    while (it3 != mapSeenFinalizedBudgets.end()) {
+        CFinalizedBudget* pfinalizedBudget = FindFinalizedBudget((*it3).first);
+        if (pfinalizedBudget && pfinalizedBudget->fValid) {
+            //mark votes
+            std::map<uint256, CFinalizedBudgetVote>::iterator it4 = pfinalizedBudget->mapVotes.begin();
+            while (it4 != pfinalizedBudget->mapVotes.end()) {
+                if ((*it4).second.fValid)
+                    (*it4).second.fSynced = true;
+                ++it4;
+            }
+        }
+        ++it3;
+    }
+}
+
+
+void CBudgetManager::Sync(CNode* pfrom, uint256 nProp, bool fPartial)
+{
+    LOCK(cs);
+
+    /*
+        Sync with a client on the network
+
+        --
+
+        This code checks each of the hash maps for all known budget proposals and finalized budget proposals, then checks them against the
+        budget object to see if they're OK. If all checks pass, we'll send it to the peer.
+
+    */
+
+    int nInvCount = 0;
+
+    std::map<uint256, CBudgetProposalBroadcast>::iterator it1 = mapSeenMasternodeBudgetProposals.begin();
+    while (it1 != mapSeenMasternodeBudgetProposals.end()) {
+        CBudgetProposal* pbudgetProposal = FindProposal((*it1).first);
+        if (pbudgetProposal && pbudgetProposal->fValid && (nProp == uint256() || (*it1).first == nProp)) {
+            pfrom->PushInventory(CInv(MSG_BUDGET_PROPOSAL, (*it1).second.GetHash()));
+            nInvCount++;
+
+            //send votes
+            std::map<uint256, CBudgetVote>::iterator it2 = pbudgetProposal->mapVotes.begin();
+            while (it2 != pbudgetProposal->mapVotes.end()) {
+                if ((*it2).second.fValid) {
+                    if ((fPartial && !(*it2).second.fSynced) || !fPartial) {
+                        pfrom->PushInventory(CInv(MSG_BUDGET_VOTE, (*it2).second.GetHash()));
+                        nInvCount++;
+                    }
+                }
+                ++it2;
+            }
+        }
+        ++it1;
+    }
+
+    pfrom->PushMessage("ssc", MASTERNODE_SYNC_BUDGET_PROP, nInvCount);
+
+    LogPrint("mnbudget", "CBudgetManager::Sync - sent %d items\n", nInvCount);
+
+    nInvCount = 0;
+
+    std::map<uint256, CFinalizedBudgetBroadcast>::iterator it3 = mapSeenFinalizedBudgets.begin();
+    while (it3 != mapSeenFinalizedBudgets.end()) {
+        CFinalizedBudget*
