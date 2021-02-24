@@ -1260,4 +1260,171 @@ void CBudgetManager::Sync(CNode* pfrom, uint256 nProp, bool fPartial)
 
     std::map<uint256, CFinalizedBudgetBroadcast>::iterator it3 = mapSeenFinalizedBudgets.begin();
     while (it3 != mapSeenFinalizedBudgets.end()) {
-        CFinalizedBudget*
+        CFinalizedBudget* pfinalizedBudget = FindFinalizedBudget((*it3).first);
+        if (pfinalizedBudget && pfinalizedBudget->fValid && (nProp == uint256() || (*it3).first == nProp)) {
+            pfrom->PushInventory(CInv(MSG_BUDGET_FINALIZED, (*it3).second.GetHash()));
+            nInvCount++;
+
+            //send votes
+            std::map<uint256, CFinalizedBudgetVote>::iterator it4 = pfinalizedBudget->mapVotes.begin();
+            while (it4 != pfinalizedBudget->mapVotes.end()) {
+                if ((*it4).second.fValid) {
+                    if ((fPartial && !(*it4).second.fSynced) || !fPartial) {
+                        pfrom->PushInventory(CInv(MSG_BUDGET_FINALIZED_VOTE, (*it4).second.GetHash()));
+                        nInvCount++;
+                    }
+                }
+                ++it4;
+            }
+        }
+        ++it3;
+    }
+
+    pfrom->PushMessage("ssc", MASTERNODE_SYNC_BUDGET_FIN, nInvCount);
+    LogPrint("mnbudget", "CBudgetManager::Sync - sent %d items\n", nInvCount);
+}
+
+bool CBudgetManager::UpdateProposal(CBudgetVote& vote, CNode* pfrom, std::string& strError)
+{
+    LOCK(cs);
+
+    if (!mapProposals.count(vote.nProposalHash)) {
+        if (pfrom) {
+            // only ask for missing items after our syncing process is complete --
+            //   otherwise we'll think a full sync succeeded when they return a result
+            if (!masternodeSync.IsSynced()) return false;
+
+            LogPrint("masternode","CBudgetManager::UpdateProposal - Unknown proposal %d, asking for source proposal\n", vote.nProposalHash.ToString());
+            mapOrphanMasternodeBudgetVotes[vote.nProposalHash] = vote;
+
+            if (!askedForSourceProposalOrBudget.count(vote.nProposalHash)) {
+                pfrom->PushMessage("mnvs", vote.nProposalHash);
+                askedForSourceProposalOrBudget[vote.nProposalHash] = GetTime();
+            }
+        }
+
+        strError = "Proposal not found!";
+        return false;
+    }
+
+
+    return mapProposals[vote.nProposalHash].AddOrUpdateVote(vote, strError);
+}
+
+bool CBudgetManager::UpdateFinalizedBudget(CFinalizedBudgetVote& vote, CNode* pfrom, std::string& strError)
+{
+    LOCK(cs);
+
+    if (!mapFinalizedBudgets.count(vote.nBudgetHash)) {
+        if (pfrom) {
+            // only ask for missing items after our syncing process is complete --
+            //   otherwise we'll think a full sync succeeded when they return a result
+            if (!masternodeSync.IsSynced()) return false;
+
+            LogPrint("masternode","CBudgetManager::UpdateFinalizedBudget - Unknown Finalized Proposal %s, asking for source budget\n", vote.nBudgetHash.ToString());
+            mapOrphanFinalizedBudgetVotes[vote.nBudgetHash] = vote;
+
+            if (!askedForSourceProposalOrBudget.count(vote.nBudgetHash)) {
+                pfrom->PushMessage("mnvs", vote.nBudgetHash);
+                askedForSourceProposalOrBudget[vote.nBudgetHash] = GetTime();
+            }
+        }
+
+        strError = "Finalized Budget " + vote.nBudgetHash.ToString() +  " not found!";
+        return false;
+    }
+    LogPrint("masternode","CBudgetManager::UpdateFinalizedBudget - Finalized Proposal %s added\n", vote.nBudgetHash.ToString());
+    return mapFinalizedBudgets[vote.nBudgetHash].AddOrUpdateVote(vote, strError);
+}
+
+CBudgetProposal::CBudgetProposal()
+{
+    strProposalName = "unknown";
+    nBlockStart = 0;
+    nBlockEnd = 0;
+    nAmount = 0;
+    nTime = 0;
+    fValid = true;
+}
+
+CBudgetProposal::CBudgetProposal(std::string strProposalNameIn, std::string strURLIn, int nBlockStartIn, int nBlockEndIn, CScript addressIn, CAmount nAmountIn, uint256 nFeeTXHashIn)
+{
+    strProposalName = strProposalNameIn;
+    strURL = strURLIn;
+    nBlockStart = nBlockStartIn;
+    nBlockEnd = nBlockEndIn;
+    address = addressIn;
+    nAmount = nAmountIn;
+    nFeeTXHash = nFeeTXHashIn;
+    fValid = true;
+}
+
+CBudgetProposal::CBudgetProposal(const CBudgetProposal& other)
+{
+    strProposalName = other.strProposalName;
+    strURL = other.strURL;
+    nBlockStart = other.nBlockStart;
+    nBlockEnd = other.nBlockEnd;
+    address = other.address;
+    nAmount = other.nAmount;
+    nTime = other.nTime;
+    nFeeTXHash = other.nFeeTXHash;
+    mapVotes = other.mapVotes;
+    fValid = true;
+}
+
+bool CBudgetProposal::IsValid(std::string& strError, bool fCheckCollateral)
+{
+    if (GetNays() - GetYeas() > mnodeman.CountEnabled(ActiveProtocol()) / 10) {
+        strError = "Proposal " + strProposalName + ": Active removal";
+        return false;
+    }
+
+    if (nBlockStart < 0) {
+        strError = "Invalid Proposal";
+        return false;
+    }
+
+    if (nBlockEnd < nBlockStart) {
+        strError = "Proposal " + strProposalName + ": Invalid nBlockEnd (end before start)";
+        return false;
+    }
+
+    if (nAmount < 10 * COIN) {
+        strError = "Proposal " + strProposalName + ": Invalid nAmount";
+        return false;
+    }
+
+    if (address == CScript()) {
+        strError = "Proposal " + strProposalName + ": Invalid Payment Address";
+        return false;
+    }
+
+    if (fCheckCollateral) {
+        int nConf = 0;
+        if (!IsBudgetCollateralValid(nFeeTXHash, GetHash(), strError, nTime, nConf)) {
+            strError = "Proposal " + strProposalName + ": Invalid collateral";
+            return false;
+        }
+    }
+
+    /*
+        TODO: There might be an issue with multisig in the coinbase on mainnet, we will add support for it in a future release.
+    */
+    if (address.IsPayToScriptHash()) {
+        strError = "Proposal " + strProposalName + ": Multisig is not currently supported.";
+        return false;
+    }
+
+    //if proposal doesn't gain traction within 2 weeks, remove it
+    // nTime not being saved correctly
+    // -- TODO: We should keep track of the last time the proposal was valid, if it's invalid for 2 weeks, erase it
+    // if(nTime + (60*60*24*2) < GetAdjustedTime()) {
+    //     if(GetYeas()-GetNays() < (mnodeman.CountEnabled(ActiveProtocol())/10)) {
+    //         strError = "Not enough support";
+    //         return false;
+    //     }
+    // }
+
+    //can only pay out 10% of the possible coins (min value of coins)
+    if (nAm
