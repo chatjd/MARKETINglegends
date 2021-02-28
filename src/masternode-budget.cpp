@@ -1427,4 +1427,184 @@ bool CBudgetProposal::IsValid(std::string& strError, bool fCheckCollateral)
     // }
 
     //can only pay out 10% of the possible coins (min value of coins)
-    if (nAm
+    if (nAmount > budget.GetTotalBudget(nBlockStart)) {
+        strError = "Proposal " + strProposalName + ": Payment more than max";
+        return false;
+    }
+
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    if (pindexPrev == NULL) {
+        strError = "Proposal " + strProposalName + ": Tip is NULL";
+        return true;
+    }
+
+    // Calculate maximum block this proposal will be valid, which is start of proposal + (number of payments * cycle)
+    int nProposalEnd = GetBlockStart() + (GetBudgetPaymentCycleBlocks() * GetTotalPaymentCount());
+
+    // if (GetBlockEnd() < pindexPrev->nHeight - GetBudgetPaymentCycleBlocks() / 2) {
+    if(nProposalEnd < pindexPrev->nHeight){
+        strError = "Proposal " + strProposalName + ": Invalid nBlockEnd (" + std::to_string(nProposalEnd) + ") < current height (" + std::to_string(pindexPrev->nHeight) + ")";
+        return false;
+    }
+
+    return true;
+}
+
+bool CBudgetProposal::AddOrUpdateVote(CBudgetVote& vote, std::string& strError)
+{
+    std::string strAction = "New vote inserted:";
+    LOCK(cs);
+
+    uint256 hash = vote.vin.prevout.GetHash();
+
+    if (mapVotes.count(hash)) {
+        if (mapVotes[hash].nTime > vote.nTime) {
+            strError = strprintf("new vote older than existing vote - %s\n", vote.GetHash().ToString());
+            LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s\n", strError);
+            return false;
+        }
+        if (vote.nTime - mapVotes[hash].nTime < BUDGET_VOTE_UPDATE_MIN) {
+            strError = strprintf("time between votes is too soon - %s - %lli sec < %lli sec\n", vote.GetHash().ToString(), vote.nTime - mapVotes[hash].nTime,BUDGET_VOTE_UPDATE_MIN);
+            LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s\n", strError);
+            return false;
+        }
+        strAction = "Existing vote updated:";
+    }
+
+    if (vote.nTime > GetTime() + (60 * 60)) {
+        strError = strprintf("new vote is too far ahead of current time - %s - nTime %lli - Max Time %lli\n", vote.GetHash().ToString(), vote.nTime, GetTime() + (60 * 60));
+        LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s\n", strError);
+        return false;
+    }
+
+    mapVotes[hash] = vote;
+    LogPrint("mnbudget", "CBudgetProposal::AddOrUpdateVote - %s %s\n", strAction.c_str(), vote.GetHash().ToString().c_str());
+
+    return true;
+}
+
+// If masternode voted for a proposal, but is now invalid -- remove the vote
+void CBudgetProposal::CleanAndRemove(bool fSignatureCheck)
+{
+    std::map<uint256, CBudgetVote>::iterator it = mapVotes.begin();
+
+    while (it != mapVotes.end()) {
+        (*it).second.fValid = (*it).second.SignatureValid(fSignatureCheck);
+        ++it;
+    }
+}
+
+double CBudgetProposal::GetRatio()
+{
+    int yeas = 0;
+    int nays = 0;
+
+    std::map<uint256, CBudgetVote>::iterator it = mapVotes.begin();
+
+    while (it != mapVotes.end()) {
+        if ((*it).second.nVote == VOTE_YES) yeas++;
+        if ((*it).second.nVote == VOTE_NO) nays++;
+        ++it;
+    }
+
+    if (yeas + nays == 0) return 0.0f;
+
+    return ((double)(yeas) / (double)(yeas + nays));
+}
+
+int CBudgetProposal::GetYeas()
+{
+    int ret = 0;
+
+    std::map<uint256, CBudgetVote>::iterator it = mapVotes.begin();
+    while (it != mapVotes.end()) {
+        if ((*it).second.nVote == VOTE_YES && (*it).second.fValid) ret++;
+        ++it;
+    }
+
+    return ret;
+}
+
+int CBudgetProposal::GetNays()
+{
+    int ret = 0;
+
+    std::map<uint256, CBudgetVote>::iterator it = mapVotes.begin();
+    while (it != mapVotes.end()) {
+        if ((*it).second.nVote == VOTE_NO && (*it).second.fValid) ret++;
+        ++it;
+    }
+
+    return ret;
+}
+
+int CBudgetProposal::GetAbstains()
+{
+    int ret = 0;
+
+    std::map<uint256, CBudgetVote>::iterator it = mapVotes.begin();
+    while (it != mapVotes.end()) {
+        if ((*it).second.nVote == VOTE_ABSTAIN && (*it).second.fValid) ret++;
+        ++it;
+    }
+
+    return ret;
+}
+
+int CBudgetProposal::GetBlockStartCycle()
+{
+    //end block is half way through the next cycle (so the proposal will be removed much after the payment is sent)
+
+    return nBlockStart - nBlockStart % GetBudgetPaymentCycleBlocks();
+}
+
+int CBudgetProposal::GetBlockCurrentCycle()
+{
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    if (pindexPrev == NULL) return -1;
+
+    if (pindexPrev->nHeight >= GetBlockEndCycle()) return -1;
+
+    return pindexPrev->nHeight - pindexPrev->nHeight % GetBudgetPaymentCycleBlocks();
+}
+
+int CBudgetProposal::GetBlockEndCycle()
+{
+    // XX42: right now single payment proposals have nBlockEnd have a cycle too early!
+    // switch back if it break something else
+    //end block is half way through the next cycle (so the proposal will be removed much after the payment is sent)
+    // return nBlockEnd - GetBudgetPaymentCycleBlocks() / 2;
+
+    // End block is half way through the next cycle (so the proposal will be removed much after the payment is sent)
+    return nBlockEnd;
+
+}
+
+int CBudgetProposal::GetTotalPaymentCount()
+{
+    return (GetBlockEndCycle() - GetBlockStartCycle()) / GetBudgetPaymentCycleBlocks();
+}
+
+int CBudgetProposal::GetRemainingPaymentCount()
+{
+    // If this budget starts in the future, this value will be wrong
+    int nPayments = (GetBlockEndCycle() - GetBlockCurrentCycle()) / GetBudgetPaymentCycleBlocks() - 1;
+    // Take the lowest value
+    return std::min(nPayments, GetTotalPaymentCount());
+}
+
+CBudgetProposalBroadcast::CBudgetProposalBroadcast(std::string strProposalNameIn, std::string strURLIn, int nPaymentCount, CScript addressIn, CAmount nAmountIn, int nBlockStartIn, uint256 nFeeTXHashIn)
+{
+    strProposalName = strProposalNameIn;
+    strURL = strURLIn;
+
+    nBlockStart = nBlockStartIn;
+
+    int nCycleStart = nBlockStart - nBlockStart % GetBudgetPaymentCycleBlocks();
+
+    // XX42: right now single payment proposals have nBlockEnd have a cycle too early!
+    // switch back if it break something else
+    //calculate the end of the cycle for this vote, add half a cycle (vote will be deleted after that block)
+    // nBlockEnd = nCycleStart + GetBudgetPaymentCycleBlocks() * nPaymentCount + GetBudgetPaymentCycleBlocks() / 2;
+
+    // Calculate the end of the 
