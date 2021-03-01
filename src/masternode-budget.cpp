@@ -1945,4 +1945,188 @@ bool CFinalizedBudget::IsValid(std::string& strError, bool fCheckCollateral)
     std::string strError2 = "";
     if (fCheckCollateral) {
         int nConf = 0;
-        if (!IsBudgetCollateralValid(nFeeTXHash, GetHash(), strError2, 
+        if (!IsBudgetCollateralValid(nFeeTXHash, GetHash(), strError2, nTime, nConf)) {
+            {
+                strError = "Budget " + strBudgetName + " Invalid Collateral : " + strError2;
+                return false;
+            }
+        }
+    }
+
+    //TODO: if N cycles old, invalid, invalid
+
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    if (pindexPrev == NULL) return true;
+
+// TODO: verify if we can safely remove this
+//
+//    if (nBlockStart < pindexPrev->nHeight - 100) {
+//        strError = "Budget " + strBudgetName + " Older than current blockHeight" ;
+//        return false;
+//    }
+
+    return true;
+}
+
+bool CFinalizedBudget::IsTransactionValid(const CTransaction& txNew, int nBlockHeight)
+{
+    int nCurrentBudgetPayment = nBlockHeight - GetBlockStart();
+    if (nCurrentBudgetPayment < 0) {
+        LogPrint("masternode","CFinalizedBudget::IsTransactionValid - Invalid block - height: %d start: %d\n", nBlockHeight, GetBlockStart());
+        return false;
+    }
+
+    if (nCurrentBudgetPayment > (int)vecBudgetPayments.size() - 1) {
+        LogPrint("masternode","CFinalizedBudget::IsTransactionValid - Invalid block - current budget payment: %d of %d\n", nCurrentBudgetPayment + 1, (int)vecBudgetPayments.size());
+        return false;
+    }
+
+    bool found = false;
+    BOOST_FOREACH (CTxOut out, txNew.vout) {
+        if (vecBudgetPayments[nCurrentBudgetPayment].payee == out.scriptPubKey && vecBudgetPayments[nCurrentBudgetPayment].nAmount == out.nValue) {
+            found = true;
+            //LogPrint("masternode","CFinalizedBudget::IsTransactionValid - Found valid Budget Payment of %d for %d\n",
+            //          vecBudgetPayments[nCurrentBudgetPayment].nAmount, vecBudgetPayments[nCurrentBudgetPayment].nProposalHash.Get32());
+        }
+    }
+
+    if (!found) {
+        CTxDestination address1;
+        ExtractDestination(vecBudgetPayments[nCurrentBudgetPayment].payee, address1);
+
+        LogPrint("masternode","CFinalizedBudget::IsTransactionValid - Missing required payment - %s: %d c: %d\n",
+                  EncodeDestination(address1), vecBudgetPayments[nCurrentBudgetPayment].nAmount, nCurrentBudgetPayment);
+    }
+
+    return found;
+}
+
+void CFinalizedBudget::SubmitVote()
+{
+    CPubKey pubKeyMasternode;
+    CKey keyMasternode;
+    std::string errorMessage;
+
+    if (!obfuScationSigner.SetKey(strMasterNodePrivKey, errorMessage, keyMasternode, pubKeyMasternode)) {
+        LogPrint("masternode","CFinalizedBudget::SubmitVote - Error upon calling SetKey\n");
+        return;
+    }
+
+    CFinalizedBudgetVote vote(activeMasternode.vin, GetHash());
+    if (!vote.Sign(keyMasternode, pubKeyMasternode)) {
+        LogPrint("masternode","CFinalizedBudget::SubmitVote - Failure to sign.");
+        return;
+    }
+
+    std::string strError = "";
+    if (budget.UpdateFinalizedBudget(vote, NULL, strError)) {
+        LogPrint("masternode","CFinalizedBudget::SubmitVote  - new finalized budget vote - %s\n", vote.GetHash().ToString());
+
+        budget.mapSeenFinalizedBudgetVotes.insert(make_pair(vote.GetHash(), vote));
+        vote.Relay();
+    } else {
+        LogPrint("masternode","CFinalizedBudget::SubmitVote : Error submitting vote - %s\n", strError);
+    }
+}
+
+CFinalizedBudgetBroadcast::CFinalizedBudgetBroadcast()
+{
+    strBudgetName = "";
+    nBlockStart = 0;
+    vecBudgetPayments.clear();
+    mapVotes.clear();
+    vchSig.clear();
+    nFeeTXHash = uint256();
+}
+
+CFinalizedBudgetBroadcast::CFinalizedBudgetBroadcast(const CFinalizedBudget& other)
+{
+    strBudgetName = other.strBudgetName;
+    nBlockStart = other.nBlockStart;
+    BOOST_FOREACH (CTxBudgetPayment out, other.vecBudgetPayments)
+        vecBudgetPayments.push_back(out);
+    mapVotes = other.mapVotes;
+    nFeeTXHash = other.nFeeTXHash;
+}
+
+CFinalizedBudgetBroadcast::CFinalizedBudgetBroadcast(std::string strBudgetNameIn, int nBlockStartIn, std::vector<CTxBudgetPayment> vecBudgetPaymentsIn, uint256 nFeeTXHashIn)
+{
+    strBudgetName = strBudgetNameIn;
+    nBlockStart = nBlockStartIn;
+    BOOST_FOREACH (CTxBudgetPayment out, vecBudgetPaymentsIn)
+        vecBudgetPayments.push_back(out);
+    mapVotes.clear();
+    nFeeTXHash = nFeeTXHashIn;
+}
+
+void CFinalizedBudgetBroadcast::Relay()
+{
+    CInv inv(MSG_BUDGET_FINALIZED, GetHash());
+    RelayInv(inv);
+}
+
+CFinalizedBudgetVote::CFinalizedBudgetVote()
+{
+    vin = CTxIn();
+    nBudgetHash = uint256();
+    nTime = 0;
+    vchSig.clear();
+    fValid = true;
+    fSynced = false;
+}
+
+CFinalizedBudgetVote::CFinalizedBudgetVote(CTxIn vinIn, uint256 nBudgetHashIn)
+{
+    vin = vinIn;
+    nBudgetHash = nBudgetHashIn;
+    nTime = GetAdjustedTime();
+    vchSig.clear();
+    fValid = true;
+    fSynced = false;
+}
+
+void CFinalizedBudgetVote::Relay()
+{
+    CInv inv(MSG_BUDGET_FINALIZED_VOTE, GetHash());
+    RelayInv(inv);
+}
+
+bool CFinalizedBudgetVote::Sign(CKey& keyMasternode, CPubKey& pubKeyMasternode)
+{
+    // Choose coins to use
+    CPubKey pubKeyCollateralAddress;
+    CKey keyCollateralAddress;
+
+    std::string errorMessage;
+    std::string strMessage = vin.prevout.ToStringShort() + nBudgetHash.ToString() + boost::lexical_cast<std::string>(nTime);
+
+    if (!obfuScationSigner.SignMessage(strMessage, errorMessage, vchSig, keyMasternode)) {
+        LogPrint("masternode","CFinalizedBudgetVote::Sign - Error upon calling SignMessage");
+        return false;
+    }
+
+    if (!obfuScationSigner.VerifyMessage(pubKeyMasternode, vchSig, strMessage, errorMessage)) {
+        LogPrint("masternode","CFinalizedBudgetVote::Sign - Error upon calling VerifyMessage");
+        return false;
+    }
+
+    return true;
+}
+
+bool CFinalizedBudgetVote::SignatureValid(bool fSignatureCheck)
+{
+    std::string errorMessage;
+
+    std::string strMessage = vin.prevout.ToStringShort() + nBudgetHash.ToString() + boost::lexical_cast<std::string>(nTime);
+
+    CMasternode* pmn = mnodeman.Find(vin);
+
+    if (pmn == NULL) {
+        LogPrint("masternode","CFinalizedBudgetVote::SignatureValid() - Unknown Masternode %s\n", strMessage);
+        return false;
+    }
+
+    if (!fSignatureCheck) return true;
+
+    if (!obfuScationSigner.VerifyMessage(pmn->pubKeyMasternode, vchSig, strMessage, errorMessage)) {
+        LogPrint("masternode","CFinalizedBu
