@@ -80,4 +80,11 @@ void ConnectMetricsScreen();
 void ThreadShowMetricsScreen();
 
 /**
- * He
+ * Heart image: https://commons.wikimedia.org/wiki/File:Heart_coraz%C3%B3n.svg
+ * License: CC BY-SA 3.0
+ *
+ * Rendering options:
+ * Vidulum: img2txt -W 40 -H 20 -f utf8 -d none -g 0.7 Z-yellow.orange-logo.png
+ * Heart: img2txt -W 40 -H 20 -f utf8 -d none 2000px-Heart_corazón.svg.png
+ */
+const std::string METRICS_ART = "";
