@@ -2129,4 +2129,18 @@ bool CFinalizedBudgetVote::SignatureValid(bool fSignatureCheck)
     if (!fSignatureCheck) return true;
 
     if (!obfuScationSigner.VerifyMessage(pmn->pubKeyMasternode, vchSig, strMessage, errorMessage)) {
-        LogPrint("masternode","CFinalizedBu
+        LogPrint("masternode","CFinalizedBudgetVote::SignatureValid() - Verify message failed %s %s\n", strMessage, errorMessage);
+        return false;
+    }
+
+    return true;
+}
+
+std::string CBudgetManager::ToString() const
+{
+    std::ostringstream info;
+
+    info << "Proposals: " << (int)mapProposals.size() << ", Budgets: " << (int)mapFinalizedBudgets.size() << ", Seen Budgets: " << (int)mapSeenMasternodeBudgetProposals.size() << ", Seen Budget Votes: " << (int)mapSeenMasternodeBudgetVotes.size() << ", Seen Final Budgets: " << (int)mapSeenFinalizedBudgets.size() << ", Seen Final Budget Votes: " << (int)mapSeenFinalizedBudgetVotes.size();
+
+    return info.str();
+}
