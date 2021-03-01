@@ -316,4 +316,191 @@ CBlockTemplate* CreateNewBlock(const CScript& scriptPubKeyIn)
 
             UpdateCoins(tx, view, nHeight);
 
-            BO
+            BOOST_FOREACH(const OutputDescription &outDescription, tx.vShieldedOutput) {
+                sapling_tree.append(outDescription.cm);
+            }
+
+            // Added
+            pblock->vtx.push_back(tx);
+            pblocktemplate->vTxFees.push_back(nTxFees);
+            pblocktemplate->vTxSigOps.push_back(nTxSigOps);
+            nBlockSize += nTxSize;
+            ++nBlockTx;
+            nBlockSigOps += nTxSigOps;
+            nFees += nTxFees;
+
+            if (fPrintPriority)
+            {
+                LogPrintf("priority %.1f fee %s txid %s\n",
+                    dPriority, feeRate.ToString(), tx.GetHash().ToString());
+            }
+
+            // Add transactions that depend on this one to the priority queue
+            if (mapDependers.count(hash))
+            {
+                BOOST_FOREACH(COrphan* porphan, mapDependers[hash])
+                {
+                    if (!porphan->setDependsOn.empty())
+                    {
+                        porphan->setDependsOn.erase(hash);
+                        if (porphan->setDependsOn.empty())
+                        {
+                            vecPriority.push_back(TxPriority(porphan->dPriority, porphan->feeRate, porphan->ptx));
+                            std::push_heap(vecPriority.begin(), vecPriority.end(), comparer);
+                        }
+                    }
+                }
+            }
+        }
+
+        nLastBlockTx = nBlockTx;
+        nLastBlockSize = nBlockSize;
+
+        // Create coinbase tx
+        CMutableTransaction txNew = CreateNewContextualCMutableTransaction(chainparams.GetConsensus(), nHeight);
+        txNew.vin.resize(1);
+        txNew.vin[0].prevout.SetNull();
+        txNew.vout.resize(1);
+        txNew.vout[0].scriptPubKey = scriptPubKeyIn;
+
+        // Masternode and general budget payments
+        FillBlockPayee(txNew, nFees);
+
+        // Make payee
+        pblock->payee = txNew.vout[txNew.vout.size() - 1].scriptPubKey;
+
+        txNew.vin[0].scriptSig = CScript() << nHeight << OP_0;
+
+        pblock->vtx[0] = txNew;
+        pblocktemplate->vTxFees[0] = -nFees;
+
+        // Randomise nonce
+        arith_uint256 nonce = UintToArith256(GetRandHash());
+        // Clear the top and bottom 16 bits (for local use as thread flags and counters)
+        nonce <<= 32;
+        nonce >>= 16;
+        pblock->nNonce = ArithToUint256(nonce);
+
+        // Fill in header
+        pblock->hashPrevBlock  = pindexPrev->GetBlockHash();
+        pblock->hashFinalSaplingRoot   = sapling_tree.root();
+        UpdateTime(pblock, Params().GetConsensus(), pindexPrev);
+        pblock->nBits          = GetNextWorkRequired(pindexPrev, pblock, Params().GetConsensus());
+        pblock->nSolution.clear();
+        pblocktemplate->vTxSigOps[0] = GetLegacySigOpCount(pblock->vtx[0]);
+
+        CValidationState state;
+        if (!TestBlockValidity(state, *pblock, pindexPrev, false, false))
+            throw std::runtime_error("CreateNewBlock(): TestBlockValidity failed");
+    }
+
+    return pblocktemplate.release();
+}
+
+#ifdef ENABLE_WALLET
+boost::optional<CScript> GetMinerScriptPubKey(CReserveKey& reservekey)
+#else
+boost::optional<CScript> GetMinerScriptPubKey()
+#endif
+{
+    CKeyID keyID;
+    CTxDestination addr = DecodeDestination(GetArg("-mineraddress", ""));
+    if (IsValidDestination(addr)) {
+        keyID = boost::get<CKeyID>(addr);
+    } else {
+#ifdef ENABLE_WALLET
+        CPubKey pubkey;
+        if (!reservekey.GetReservedKey(pubkey)) {
+            return boost::optional<CScript>();
+        }
+        keyID = pubkey.GetID();
+#else
+        return boost::optional<CScript>();
+#endif
+    }
+
+    CScript scriptPubKey = CScript() << OP_DUP << OP_HASH160 << ToByteVector(keyID) << OP_EQUALVERIFY << OP_CHECKSIG;
+    return scriptPubKey;
+}
+
+#ifdef ENABLE_WALLET
+CBlockTemplate* CreateNewBlockWithKey(CReserveKey& reservekey)
+{
+    boost::optional<CScript> scriptPubKey = GetMinerScriptPubKey(reservekey);
+#else
+CBlockTemplate* CreateNewBlockWithKey()
+{
+    boost::optional<CScript> scriptPubKey = GetMinerScriptPubKey();
+#endif
+
+    if (!scriptPubKey) {
+        return NULL;
+    }
+    return CreateNewBlock(*scriptPubKey);
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//
+// Internal miner
+//
+
+#ifdef ENABLE_MINING
+
+void IncrementExtraNonce(CBlock* pblock, CBlockIndex* pindexPrev, unsigned int& nExtraNonce)
+{
+    // Update nExtraNonce
+    static uint256 hashPrevBlock;
+    if (hashPrevBlock != pblock->hashPrevBlock)
+    {
+        nExtraNonce = 0;
+        hashPrevBlock = pblock->hashPrevBlock;
+    }
+    ++nExtraNonce;
+    unsigned int nHeight = pindexPrev->nHeight+1; // Height first in coinbase required for block.version=2
+    CMutableTransaction txCoinbase(pblock->vtx[0]);
+    txCoinbase.vin[0].scriptSig = (CScript() << nHeight << CScriptNum(nExtraNonce)) + COINBASE_FLAGS;
+    assert(txCoinbase.vin[0].scriptSig.size() <= 100);
+
+    pblock->vtx[0] = txCoinbase;
+    pblock->hashMerkleRoot = pblock->BuildMerkleTree();
+}
+
+#ifdef ENABLE_WALLET
+static bool ProcessBlockFound(CBlock* pblock, CWallet& wallet, CReserveKey& reservekey)
+#else
+static bool ProcessBlockFound(CBlock* pblock)
+#endif // ENABLE_WALLET
+{
+    LogPrintf("%s\n", pblock->ToString());
+    LogPrintf("generated %s\n", FormatMoney(pblock->vtx[0].vout[0].nValue));
+
+    // Found a solution
+    {
+        LOCK(cs_main);
+        if (pblock->hashPrevBlock != chainActive.Tip()->GetBlockHash())
+            return error("VidulumMiner: generated block is stale");
+    }
+
+#ifdef ENABLE_WALLET
+    if (GetArg("-mineraddress", "").empty()) {
+        // Remove key from key pool
+        reservekey.KeepKey();
+    }
+
+    // Track how many getdata requests this block gets
+    {
+        LOCK(wallet.cs_wallet);
+        wallet.mapRequestCount[pblock->GetHash()] = 0;
+    }
+#endif
+
+    // Process this block the same as if we had received it from another node
+    CValidationState state;
+
+    // Check that the time is valid
+    if (!ProcessNewBlock(state, NULL, pblock, true, NULL))
+        return error("VidulumMiner: ProcessNewBlock, block not accepted");
+
+    TrackMinedBlock(pblock->GetHash());
+
+    
