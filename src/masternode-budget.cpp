@@ -1607,4 +1607,186 @@ CBudgetProposalBroadcast::CBudgetProposalBroadcast(std::string strProposalNameIn
     //calculate the end of the cycle for this vote, add half a cycle (vote will be deleted after that block)
     // nBlockEnd = nCycleStart + GetBudgetPaymentCycleBlocks() * nPaymentCount + GetBudgetPaymentCycleBlocks() / 2;
 
-    // Calculate the end of the 
+    // Calculate the end of the cycle for this vote, vote will be deleted after next cycle
+    nBlockEnd = nCycleStart + (GetBudgetPaymentCycleBlocks() + 1)  * nPaymentCount;
+
+    address = addressIn;
+    nAmount = nAmountIn;
+
+    nFeeTXHash = nFeeTXHashIn;
+}
+
+void CBudgetProposalBroadcast::Relay()
+{
+    CInv inv(MSG_BUDGET_PROPOSAL, GetHash());
+    RelayInv(inv);
+}
+
+CBudgetVote::CBudgetVote()
+{
+    vin = CTxIn();
+    nProposalHash = uint256();
+    nVote = VOTE_ABSTAIN;
+    nTime = 0;
+    fValid = true;
+    fSynced = false;
+}
+
+CBudgetVote::CBudgetVote(CTxIn vinIn, uint256 nProposalHashIn, int nVoteIn)
+{
+    vin = vinIn;
+    nProposalHash = nProposalHashIn;
+    nVote = nVoteIn;
+    nTime = GetAdjustedTime();
+    fValid = true;
+    fSynced = false;
+}
+
+void CBudgetVote::Relay()
+{
+    CInv inv(MSG_BUDGET_VOTE, GetHash());
+    RelayInv(inv);
+}
+
+bool CBudgetVote::Sign(CKey& keyMasternode, CPubKey& pubKeyMasternode)
+{
+    // Choose coins to use
+    CPubKey pubKeyCollateralAddress;
+    CKey keyCollateralAddress;
+
+    std::string errorMessage;
+    std::string strMessage = vin.prevout.ToStringShort() + nProposalHash.ToString() + boost::lexical_cast<std::string>(nVote) + boost::lexical_cast<std::string>(nTime);
+
+    if (!obfuScationSigner.SignMessage(strMessage, errorMessage, vchSig, keyMasternode)) {
+        LogPrint("masternode","CBudgetVote::Sign - Error upon calling SignMessage");
+        return false;
+    }
+
+    if (!obfuScationSigner.VerifyMessage(pubKeyMasternode, vchSig, strMessage, errorMessage)) {
+        LogPrint("masternode","CBudgetVote::Sign - Error upon calling VerifyMessage");
+        return false;
+    }
+
+    return true;
+}
+
+bool CBudgetVote::SignatureValid(bool fSignatureCheck)
+{
+    std::string errorMessage;
+    std::string strMessage = vin.prevout.ToStringShort() + nProposalHash.ToString() + boost::lexical_cast<std::string>(nVote) + boost::lexical_cast<std::string>(nTime);
+
+    CMasternode* pmn = mnodeman.Find(vin);
+
+    if (pmn == NULL) {
+        if (fDebug){
+            LogPrint("masternode","CBudgetVote::SignatureValid() - Unknown Masternode - %s\n", vin.prevout.hash.ToString());
+        }
+        return false;
+    }
+
+    if (!fSignatureCheck) return true;
+
+    if (!obfuScationSigner.VerifyMessage(pmn->pubKeyMasternode, vchSig, strMessage, errorMessage)) {
+        LogPrint("masternode","CBudgetVote::SignatureValid() - Verify message failed\n");
+        return false;
+    }
+
+    return true;
+}
+
+CFinalizedBudget::CFinalizedBudget()
+{
+    strBudgetName = "";
+    nBlockStart = 0;
+    vecBudgetPayments.clear();
+    mapVotes.clear();
+    nFeeTXHash = uint256();
+    nTime = 0;
+    fValid = true;
+    fAutoChecked = false;
+}
+
+CFinalizedBudget::CFinalizedBudget(const CFinalizedBudget& other)
+{
+    strBudgetName = other.strBudgetName;
+    nBlockStart = other.nBlockStart;
+    vecBudgetPayments = other.vecBudgetPayments;
+    mapVotes = other.mapVotes;
+    nFeeTXHash = other.nFeeTXHash;
+    nTime = other.nTime;
+    fValid = true;
+    fAutoChecked = false;
+}
+
+bool CFinalizedBudget::AddOrUpdateVote(CFinalizedBudgetVote& vote, std::string& strError)
+{
+    LOCK(cs);
+
+    uint256 hash = vote.vin.prevout.GetHash();
+    std::string strAction = "New vote inserted:";
+
+    if (mapVotes.count(hash)) {
+        if (mapVotes[hash].nTime > vote.nTime) {
+            strError = strprintf("new vote older than existing vote - %s\n", vote.GetHash().ToString());
+            LogPrint("mnbudget", "CFinalizedBudget::AddOrUpdateVote - %s\n", strError);
+            return false;
+        }
+        if (vote.nTime - mapVotes[hash].nTime < BUDGET_VOTE_UPDATE_MIN) {
+            strError = strprintf("time between votes is too soon - %s - %lli sec < %lli sec\n", vote.GetHash().ToString(), vote.nTime - mapVotes[hash].nTime,BUDGET_VOTE_UPDATE_MIN);
+            LogPrint("mnbudget", "CFinalizedBudget::AddOrUpdateVote - %s\n", strError);
+            return false;
+        }
+        strAction = "Existing vote updated:";
+    }
+
+    if (vote.nTime > GetTime() + (60 * 60)) {
+        strError = strprintf("new vote is too far ahead of current time - %s - nTime %lli - Max Time %lli\n", vote.GetHash().ToString(), vote.nTime, GetTime() + (60 * 60));
+        LogPrint("mnbudget", "CFinalizedBudget::AddOrUpdateVote - %s\n", strError);
+        return false;
+    }
+
+    mapVotes[hash] = vote;
+    LogPrint("mnbudget", "CFinalizedBudget::AddOrUpdateVote - %s %s\n", strAction.c_str(), vote.GetHash().ToString().c_str());
+    return true;
+}
+
+//evaluate if we should vote for this. Masternode only
+void CFinalizedBudget::AutoCheck()
+{
+    LOCK(cs);
+
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    if (!pindexPrev) return;
+
+    LogPrint("masternode","CFinalizedBudget::AutoCheck - %lli - %d\n", pindexPrev->nHeight, fAutoChecked);
+
+    if (!fMasterNode || fAutoChecked) return;
+
+    //do this 1 in 4 blocks -- spread out the voting activity on mainnet
+    // -- this function is only called every fourteenth block, so this is really 1 in 56 blocks
+    if (NetworkIdFromCommandLine() == CBaseChainParams::MAIN && rand() % 4 != 0) {
+        LogPrint("masternode","CFinalizedBudget::AutoCheck - waiting\n");
+        return;
+    }
+
+    fAutoChecked = true; //we only need to check this once
+
+
+    if (strBudgetMode == "auto") //only vote for exact matches
+    {
+        std::vector<CBudgetProposal*> vBudgetProposals = budget.GetBudget();
+
+
+        for (unsigned int i = 0; i < vecBudgetPayments.size(); i++) {
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - nProp %d %s\n", i, vecBudgetPayments[i].nProposalHash.ToString());
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - Payee %d %s\n", i, vecBudgetPayments[i].payee.ToString());
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - nAmount %d %lli\n", i, vecBudgetPayments[i].nAmount);
+        }
+
+        for (unsigned int i = 0; i < vBudgetProposals.size(); i++) {
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - nProp %d %s\n", i, vBudgetProposals[i]->GetHash().ToString());
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - Payee %d %s\n", i, vBudgetProposals[i]->GetPayee().ToString());
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - nAmount %d %lli\n", i, vBudgetProposals[i]->GetAmount());
+        }
+
+        i
