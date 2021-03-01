@@ -503,4 +503,164 @@ static bool ProcessBlockFound(CBlock* pblock)
 
     TrackMinedBlock(pblock->GetHash());
 
-    
+    return true;
+}
+
+#ifdef ENABLE_WALLET
+void static BitcoinMiner(CWallet *pwallet)
+#else
+void static BitcoinMiner()
+#endif
+{
+    LogPrintf("VidulumMiner started\n");
+    SetThreadPriority(THREAD_PRIORITY_LOWEST);
+    RenameThread("vidulum-miner");
+    const CChainParams& chainparams = Params();
+
+#ifdef ENABLE_WALLET
+    // Each thread has its own key
+    CReserveKey reservekey(pwallet);
+#endif
+
+    // Each thread has its own counter
+    unsigned int nExtraNonce = 0;
+
+
+    std::string solver = GetArg("-equihashsolver", "default");
+    assert(solver == "tromp" || solver == "default");
+
+    std::mutex m_cs;
+    bool cancelSolver = false;
+    boost::signals2::connection c = uiInterface.NotifyBlockTip.connect(
+        [&m_cs, &cancelSolver](const uint256& hashNewTip) mutable {
+            std::lock_guard<std::mutex> lock{m_cs};
+            cancelSolver = true;
+        }
+    );
+    miningTimer.start();
+
+    try {
+        while (true) {
+            if (chainparams.MiningRequiresPeers()) {
+                // Busy-wait for the network to come online so we don't waste time mining
+                // on an obsolete chain. In regtest mode we expect to fly solo.
+                miningTimer.stop();
+                do {
+                    bool fvNodesEmpty;
+                    {
+                        LOCK(cs_vNodes);
+                        fvNodesEmpty = vNodes.empty();
+                    }
+                    if (!fvNodesEmpty && !IsInitialBlockDownload())
+                        break;
+                    MilliSleep(1000);
+                } while (true);
+                miningTimer.start();
+            }
+
+            //
+            // Create new block
+            //
+            unsigned int nTransactionsUpdatedLast = mempool.GetTransactionsUpdated();
+
+
+            // Get the height of current tip
+            int nHeight = chainActive.Height();
+            if (nHeight == -1) {
+                LogPrintf("Error in Vidulum Miner: chainActive.Height() returned -1\n");
+                return;
+            }
+            CBlockIndex* pindexPrev = chainActive[nHeight];
+
+            // Get equihash parameters for the next block to be mined.
+            EHparameters ehparams[MAX_EH_PARAM_LIST_LEN]; //allocate on-stack space for parameters list
+            validEHparameterList(ehparams,nHeight,chainparams);
+
+            unsigned int n = ehparams[0].n;
+            unsigned int k = ehparams[0].k;
+            LogPrint("pow", "Using Equihash solver \"%s\" with n = %u, k = %u\n", solver, n, k);
+
+
+
+
+
+
+#ifdef ENABLE_WALLET
+            unique_ptr<CBlockTemplate> pblocktemplate(CreateNewBlockWithKey(reservekey));
+#else
+            unique_ptr<CBlockTemplate> pblocktemplate(CreateNewBlockWithKey());
+#endif
+            if (!pblocktemplate.get())
+            {
+                if (GetArg("-mineraddress", "").empty()) {
+                    LogPrintf("Error in VidulumMiner: Keypool ran out, please call keypoolrefill before restarting the mining thread\n");
+                } else {
+                    // Should never reach here, because -mineraddress validity is checked in init.cpp
+                    LogPrintf("Error in VidulumMiner: Invalid -mineraddress\n");
+                }
+                return;
+            }
+            CBlock *pblock = &pblocktemplate->block;
+            IncrementExtraNonce(pblock, pindexPrev, nExtraNonce);
+
+            LogPrintf("Running VidulumMiner with %u transactions in block (%u bytes)\n", pblock->vtx.size(),
+                ::GetSerializeSize(*pblock, SER_NETWORK, PROTOCOL_VERSION));
+
+            //
+            // Search
+            //
+            int64_t nStart = GetTime();
+            arith_uint256 hashTarget = arith_uint256().SetCompact(pblock->nBits);
+
+            while (true) {
+                // Hash state
+                crypto_generichash_blake2b_state state;
+                EhInitialiseState(n, k, state);
+
+                // I = the block header minus nonce and solution.
+                CEquihashInput I{*pblock};
+                CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+                ss << I;
+
+                // H(I||...
+                crypto_generichash_blake2b_update(&state, (unsigned char*)&ss[0], ss.size());
+
+                // H(I||V||...
+                crypto_generichash_blake2b_state curr_state;
+                curr_state = state;
+                crypto_generichash_blake2b_update(&curr_state,
+                                                  pblock->nNonce.begin(),
+                                                  pblock->nNonce.size());
+
+                // (x_1, x_2, ...) = A(I, V, n, k)
+                LogPrint("pow", "Running Equihash solver \"%s\" with nNonce = %s\n",
+                         solver, pblock->nNonce.ToString());
+
+                std::function<bool(std::vector<unsigned char>)> validBlock =
+#ifdef ENABLE_WALLET
+                        [&pblock, &hashTarget, &pwallet, &reservekey, &m_cs, &cancelSolver, &chainparams]
+#else
+                        [&pblock, &hashTarget, &m_cs, &cancelSolver, &chainparams]
+#endif
+                        (std::vector<unsigned char> soln) {
+                    // Write the solution to the hash and compute the result.
+                    LogPrint("pow", "- Checking solution against target\n");
+                    pblock->nSolution = soln;
+                    solutionTargetChecks.increment();
+
+                    if (UintToArith256(pblock->GetHash()) > hashTarget) {
+                        return false;
+                    }
+
+                    // Found a solution
+                    SetThreadPriority(THREAD_PRIORITY_NORMAL);
+                    LogPrintf("VidulumMiner:\n");
+                    LogPrintf("proof-of-work found  \n  hash: %s  \ntarget: %s\n", pblock->GetHash().GetHex(), hashTarget.GetHex());
+#ifdef ENABLE_WALLET
+                    if (ProcessBlockFound(pblock, *pwallet, reservekey)) {
+#else
+                    if (ProcessBlockFound(pblock)) {
+#endif
+                        // Ignore chain updates caused by us
+                        std::lock_guard<std::mutex> lock{m_cs};
+                   
