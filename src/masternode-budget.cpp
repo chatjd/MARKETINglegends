@@ -1789,4 +1789,160 @@ void CFinalizedBudget::AutoCheck()
             LogPrint("masternode","CFinalizedBudget::AutoCheck - nAmount %d %lli\n", i, vBudgetProposals[i]->GetAmount());
         }
 
-        i
+        if (vBudgetProposals.size() == 0) {
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - Can't get Budget, aborting\n");
+            return;
+        }
+
+        if (vBudgetProposals.size() != vecBudgetPayments.size()) {
+            LogPrint("masternode","CFinalizedBudget::AutoCheck - Budget length doesn't match. vBudgetProposals.size()=%ld != vecBudgetPayments.size()=%ld\n",
+                      vBudgetProposals.size(), vecBudgetPayments.size());
+            return;
+        }
+
+
+        for (unsigned int i = 0; i < vecBudgetPayments.size(); i++) {
+            if (i > vBudgetProposals.size() - 1) {
+                LogPrint("masternode","CFinalizedBudget::AutoCheck - Proposal size mismatch, i=%d > (vBudgetProposals.size() - 1)=%d\n", i, vBudgetProposals.size() - 1);
+                return;
+            }
+
+            if (vecBudgetPayments[i].nProposalHash != vBudgetProposals[i]->GetHash()) {
+                LogPrint("masternode","CFinalizedBudget::AutoCheck - item #%d doesn't match %s %s\n", i, vecBudgetPayments[i].nProposalHash.ToString(), vBudgetProposals[i]->GetHash().ToString());
+                return;
+            }
+
+            // if(vecBudgetPayments[i].payee != vBudgetProposals[i]->GetPayee()){ -- triggered with false positive
+            if (vecBudgetPayments[i].payee.ToString() != vBudgetProposals[i]->GetPayee().ToString()) {
+                LogPrint("masternode","CFinalizedBudget::AutoCheck - item #%d payee doesn't match %s %s\n", i, vecBudgetPayments[i].payee.ToString(), vBudgetProposals[i]->GetPayee().ToString());
+                return;
+            }
+
+            if (vecBudgetPayments[i].nAmount != vBudgetProposals[i]->GetAmount()) {
+                LogPrint("masternode","CFinalizedBudget::AutoCheck - item #%d payee doesn't match %lli %lli\n", i, vecBudgetPayments[i].nAmount, vBudgetProposals[i]->GetAmount());
+                return;
+            }
+        }
+
+        LogPrint("masternode","CFinalizedBudget::AutoCheck - Finalized Budget Matches! Submitting Vote.\n");
+        SubmitVote();
+    }
+}
+// If masternode voted for a proposal, but is now invalid -- remove the vote
+void CFinalizedBudget::CleanAndRemove(bool fSignatureCheck)
+{
+    std::map<uint256, CFinalizedBudgetVote>::iterator it = mapVotes.begin();
+
+    while (it != mapVotes.end()) {
+        (*it).second.fValid = (*it).second.SignatureValid(fSignatureCheck);
+        ++it;
+    }
+}
+
+
+CAmount CFinalizedBudget::GetTotalPayout()
+{
+    CAmount ret = 0;
+
+    for (unsigned int i = 0; i < vecBudgetPayments.size(); i++) {
+        ret += vecBudgetPayments[i].nAmount;
+    }
+
+    return ret;
+}
+
+std::string CFinalizedBudget::GetProposals()
+{
+    LOCK(cs);
+    std::string ret = "";
+
+    BOOST_FOREACH (CTxBudgetPayment& budgetPayment, vecBudgetPayments) {
+        CBudgetProposal* pbudgetProposal = budget.FindProposal(budgetPayment.nProposalHash);
+
+        std::string token = budgetPayment.nProposalHash.ToString();
+
+        if (pbudgetProposal) token = pbudgetProposal->GetName();
+        if (ret == "") {
+            ret = token;
+        } else {
+            ret += "," + token;
+        }
+    }
+    return ret;
+}
+
+std::string CFinalizedBudget::GetStatus()
+{
+    std::string retBadHashes = "";
+    std::string retBadPayeeOrAmount = "";
+
+    for (int nBlockHeight = GetBlockStart(); nBlockHeight <= GetBlockEnd(); nBlockHeight++) {
+        CTxBudgetPayment budgetPayment;
+        if (!GetBudgetPaymentByBlock(nBlockHeight, budgetPayment)) {
+            LogPrint("masternode","CFinalizedBudget::GetStatus - Couldn't find budget payment for block %lld\n", nBlockHeight);
+            continue;
+        }
+
+        CBudgetProposal* pbudgetProposal = budget.FindProposal(budgetPayment.nProposalHash);
+        if (!pbudgetProposal) {
+            if (retBadHashes == "") {
+                retBadHashes = "Unknown proposal hash! Check this proposal before voting" + budgetPayment.nProposalHash.ToString();
+            } else {
+                retBadHashes += "," + budgetPayment.nProposalHash.ToString();
+            }
+        } else {
+            if (pbudgetProposal->GetPayee() != budgetPayment.payee || pbudgetProposal->GetAmount() != budgetPayment.nAmount) {
+                if (retBadPayeeOrAmount == "") {
+                    retBadPayeeOrAmount = "Budget payee/nAmount doesn't match our proposal! " + budgetPayment.nProposalHash.ToString();
+                } else {
+                    retBadPayeeOrAmount += "," + budgetPayment.nProposalHash.ToString();
+                }
+            }
+        }
+    }
+
+    if (retBadHashes == "" && retBadPayeeOrAmount == "") return "OK";
+
+    return retBadHashes + retBadPayeeOrAmount;
+}
+
+bool CFinalizedBudget::IsValid(std::string& strError, bool fCheckCollateral)
+{
+    // Must be the correct block for payment to happen (once a month)
+    if (nBlockStart % GetBudgetPaymentCycleBlocks() != 0) {
+        strError = "Invalid BlockStart";
+        return false;
+    }
+
+    // The following 2 checks check the same (basically if vecBudgetPayments.size() > 100)
+    if (GetBlockEnd() - nBlockStart > 100) {
+        strError = "Invalid BlockEnd";
+        return false;
+    }
+    if ((int)vecBudgetPayments.size() > 100) {
+        strError = "Invalid budget payments count (too many)";
+        return false;
+    }
+    if (strBudgetName == "") {
+        strError = "Invalid Budget Name";
+        return false;
+    }
+    if (nBlockStart == 0) {
+        strError = "Budget " + strBudgetName + " Invalid BlockStart == 0";
+        return false;
+    }
+    if (nFeeTXHash == uint256()) {
+        strError = "Budget " + strBudgetName + " Invalid FeeTx == 0";
+        return false;
+    }
+
+    // Can only pay out 10% of the possible coins (min value of coins)
+    if (GetTotalPayout() > budget.GetTotalBudget(nBlockStart)) {
+        strError = "Budget " + strBudgetName + " Invalid Payout (more than max)";
+        return false;
+    }
+
+    std::string strError2 = "";
+    if (fCheckCollateral) {
+        int nConf = 0;
+        if (!IsBudgetCollateralValid(nFeeTXHash, GetHash(), strError2, 
