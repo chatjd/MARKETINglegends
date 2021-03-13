@@ -663,4 +663,142 @@ void static BitcoinMiner()
 #endif
                         // Ignore chain updates caused by us
                         std::lock_guard<std::mutex> lock{m_cs};
-                   
+                        cancelSolver = false;
+                    }
+                    SetThreadPriority(THREAD_PRIORITY_LOWEST);
+
+                    // In regression test mode, stop mining after a block is found.
+                    if (chainparams.MineBlocksOnDemand()) {
+                        // Increment here because throwing skips the call below
+                        ehSolverRuns.increment();
+                        throw boost::thread_interrupted();
+                    }
+
+                    return true;
+                };
+                std::function<bool(EhSolverCancelCheck)> cancelled = [&m_cs, &cancelSolver](EhSolverCancelCheck pos) {
+                    std::lock_guard<std::mutex> lock{m_cs};
+                    return cancelSolver;
+                };
+
+                // TODO: factor this out into a function with the same API for each solver.
+                if (solver == "tromp") {
+                    // Create solver and initialize it.
+                    equi eq(1);
+                    eq.setstate(&curr_state);
+
+                    // Intialization done, start algo driver.
+                    eq.digit0(0);
+                    eq.xfull = eq.bfull = eq.hfull = 0;
+                    eq.showbsizes(0);
+                    for (u32 r = 1; r < WK; r++) {
+                        (r&1) ? eq.digitodd(r, 0) : eq.digiteven(r, 0);
+                        eq.xfull = eq.bfull = eq.hfull = 0;
+                        eq.showbsizes(r);
+                    }
+                    eq.digitK(0);
+                    ehSolverRuns.increment();
+
+                    // Convert solution indices to byte array (decompress) and pass it to validBlock method.
+                    for (size_t s = 0; s < eq.nsols; s++) {
+                        LogPrint("pow", "Checking solution %d\n", s+1);
+                        std::vector<eh_index> index_vector(PROOFSIZE);
+                        for (size_t i = 0; i < PROOFSIZE; i++) {
+                            index_vector[i] = eq.sols[s][i];
+                        }
+                        std::vector<unsigned char> sol_char = GetMinimalFromIndices(index_vector, DIGITBITS);
+
+                        if (validBlock(sol_char)) {
+                            // If we find a POW solution, do not try other solutions
+                            // because they become invalid as we created a new block in blockchain.
+                            break;
+                        }
+                    }
+                } else {
+                    try {
+                        // If we find a valid block, we rebuild
+                        bool found = EhOptimisedSolve(n, k, curr_state, validBlock, cancelled);
+                        ehSolverRuns.increment();
+                        if (found) {
+                            break;
+                        }
+                    } catch (EhSolverCancelledException&) {
+                        LogPrint("pow", "Equihash solver cancelled\n");
+                        std::lock_guard<std::mutex> lock{m_cs};
+                        cancelSolver = false;
+                    }
+                }
+
+                // Check for stop or if block needs to be rebuilt
+                boost::this_thread::interruption_point();
+                // Regtest mode doesn't require peers
+                if (vNodes.empty() && chainparams.MiningRequiresPeers())
+                    break;
+                if ((UintToArith256(pblock->nNonce) & 0xffff) == 0xffff)
+                    break;
+                if (mempool.GetTransactionsUpdated() != nTransactionsUpdatedLast && GetTime() - nStart > 60)
+                    break;
+                if (pindexPrev != chainActive.Tip())
+                    break;
+
+                // Update nNonce and nTime
+                pblock->nNonce = ArithToUint256(UintToArith256(pblock->nNonce) + 1);
+                UpdateTime(pblock, chainparams.GetConsensus(), pindexPrev);
+                if (chainparams.GetConsensus().nPowAllowMinDifficultyBlocksAfterHeight != boost::none)
+                {
+                    // Changing pblock->nTime can change work required on testnet:
+                    hashTarget.SetCompact(pblock->nBits);
+                }
+            }
+        }
+    }
+    catch (const boost::thread_interrupted&)
+    {
+        miningTimer.stop();
+        c.disconnect();
+        LogPrintf("VidulumMiner terminated\n");
+        throw;
+    }
+    catch (const std::runtime_error &e)
+    {
+        miningTimer.stop();
+        c.disconnect();
+        LogPrintf("VidulumMiner runtime error: %s\n", e.what());
+        return;
+    }
+    miningTimer.stop();
+    c.disconnect();
+}
+
+#ifdef ENABLE_WALLET
+void GenerateBitcoins(bool fGenerate, CWallet* pwallet, int nThreads)
+#else
+void GenerateBitcoins(bool fGenerate, int nThreads)
+#endif
+{
+    static boost::thread_group* minerThreads = NULL;
+
+    if (nThreads < 0)
+        nThreads = GetNumCores();
+
+    if (minerThreads != NULL)
+    {
+        minerThreads->interrupt_all();
+        delete minerThreads;
+        minerThreads = NULL;
+    }
+
+    if (nThreads == 0 || !fGenerate)
+        return;
+
+    minerThreads = new boost::thread_group();
+    for (int i = 0; i < nThreads; i++) {
+#ifdef ENABLE_WALLET
+        minerThreads->create_thread(boost::bind(&BitcoinMiner, pwallet));
+#else
+        minerThreads->create_thread(&BitcoinMiner);
+#endif
+    }
+}
+
+#endif // ENABLE_MINING
