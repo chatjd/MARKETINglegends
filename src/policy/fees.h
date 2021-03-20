@@ -117,3 +117,168 @@ private:
     // For each bucket X, track the number of transactions in the mempool
     // that are unconfirmed for each possible confirmation value Y
     std::vector<std::vector<int> > unconfTxs;  //unconfTxs[Y][X]
+    // transactions still unconfirmed after MAX_CONFIRMS for each bucket
+    std::vector<int> oldUnconfTxs;
+
+public:
+    /** Find the bucket index of a given value */
+    unsigned int FindBucketIndex(double val);
+
+    /**
+     * Initialize the data structures.  This is called by BlockPolicyEstimator's
+     * constructor with default values.  A final bucket is created implicitly for
+     * values greater than the last upper limit in defaultBuckets.
+     *
+     * @param defaultBuckets contains the upper limits for the bucket boundaries
+     * @param maxConfirms max number of confirms to track
+     * @param decay how much to decay the historical moving average per block
+     * @param dataTypeString for logging purposes
+     */
+    void Initialize(std::vector<double>& defaultBuckets, unsigned int maxConfirms, double decay, std::string dataTypeString);
+
+    /** Clear the state of the curBlock variables to start counting for the new block */
+    void ClearCurrent(unsigned int nBlockHeight);
+
+    /**
+     * Record a new transaction data point in the current block stats
+     * @param blocksToConfirm the number of blocks it took this transaction to confirm
+     * @param val either the fee or the priority when entered of the transaction
+     * @warning blocksToConfirm is 1-based and has to be >= 1
+     */
+    void Record(int blocksToConfirm, double val);
+
+    /** Record a new transaction entering the mempool*/
+    unsigned int NewTx(unsigned int nBlockHeight, double val);
+
+    /** Remove a transaction from mempool tracking stats*/
+    void removeTx(unsigned int entryHeight, unsigned int nBestSeenHeight,
+                  unsigned int bucketIndex);
+
+    /** Update our estimates by decaying our historical moving average and updating
+        with the data gathered from the current block */
+    void UpdateMovingAverages();
+
+    /**
+     * Calculate a fee or priority estimate.  Find the lowest value bucket (or range of buckets
+     * to make sure we have enough data points) whose transactions still have sufficient likelihood
+     * of being confirmed within the target number of confirmations
+     * @param confTarget target number of confirmations
+     * @param sufficientTxVal required average number of transactions per block in a bucket range
+     * @param minSuccess the success probability we require
+     * @param requireGreater return the lowest fee/pri such that all higher values pass minSuccess OR
+     *        return the highest fee/pri such that all lower values fail minSuccess
+     * @param nBlockHeight the current block height
+     */
+    double EstimateMedianVal(int confTarget, double sufficientTxVal,
+                             double minSuccess, bool requireGreater, unsigned int nBlockHeight);
+
+    /** Return the max number of confirms we're tracking */
+    unsigned int GetMaxConfirms() { return confAvg.size(); }
+
+    /** Write state of estimation data to a file*/
+    void Write(CAutoFile& fileout);
+
+    /**
+     * Read saved state of estimation data from a file and replace all internal data structures and
+     * variables with this state.
+     */
+    void Read(CAutoFile& filein);
+};
+
+
+
+/** Track confirm delays up to 25 blocks, can't estimate beyond that */
+static const unsigned int MAX_BLOCK_CONFIRMS = 25;
+
+/** Require greater than 85% of X fee transactions to be confirmed within Y blocks for X to be big enough */
+static const double MIN_SUCCESS_PCT = .85;
+static const double UNLIKELY_PCT = .5;
+
+/** Require an avg of 1 tx in the combined fee bucket per block to have stat significance */
+static const double SUFFICIENT_FEETXS = 1;
+
+/** Require only an avg of 1 tx every 5 blocks in the combined pri bucket (way less pri txs) */
+static const double SUFFICIENT_PRITXS = .2;
+
+// Minimum and Maximum values for tracking fees and priorities
+static const double MIN_FEERATE = 10;
+static const double MAX_FEERATE = 1e7;
+static const double INF_FEERATE = MAX_MONEY;
+static const double MIN_PRIORITY = 10;
+static const double MAX_PRIORITY = 1e16;
+static const double INF_PRIORITY = 1e9 * MAX_MONEY;
+
+// We have to lump transactions into buckets based on fee or priority, but we want to be able
+// to give accurate estimates over a large range of potential fees and priorities
+// Therefore it makes sense to exponentially space the buckets
+/** Spacing of FeeRate buckets */
+static const double FEE_SPACING = 1.1;
+
+/** Spacing of Priority buckets */
+static const double PRI_SPACING = 2;
+
+/**
+ *  We want to be able to estimate fees or priorities that are needed on tx's to be included in
+ * a certain number of blocks.  Every time a block is added to the best chain, this class records
+ * stats on the transactions included in that block
+ */
+class CBlockPolicyEstimator
+{
+public:
+    /** Create new BlockPolicyEstimator and initialize stats tracking classes with default values */
+    CBlockPolicyEstimator(const CFeeRate& minRelayFee);
+
+    /** Process all the transactions that have been included in a block */
+    void processBlock(unsigned int nBlockHeight,
+                      std::vector<CTxMemPoolEntry>& entries, bool fCurrentEstimate);
+
+    /** Process a transaction confirmed in a block*/
+    void processBlockTx(unsigned int nBlockHeight, const CTxMemPoolEntry& entry);
+
+    /** Process a transaction accepted to the mempool*/
+    void processTransaction(const CTxMemPoolEntry& entry, bool fCurrentEstimate);
+
+    /** Remove a transaction from the mempool tracking stats*/
+    void removeTx(uint256 hash);
+
+    /** Is this transaction likely included in a block because of its fee?*/
+    bool isFeeDataPoint(const CFeeRate &fee, double pri);
+
+    /** Is this transaction likely included in a block because of its priority?*/
+    bool isPriDataPoint(const CFeeRate &fee, double pri);
+
+    /** Return a fee estimate */
+    CFeeRate estimateFee(int confTarget);
+
+    /** Return a priority estimate */
+    double estimatePriority(int confTarget);
+
+    /** Write estimation data to a file */
+    void Write(CAutoFile& fileout);
+
+    /** Read estimation data from a file */
+    void Read(CAutoFile& filein);
+
+private:
+    CFeeRate minTrackedFee; //! Passed to constructor to avoid dependency on main
+    double minTrackedPriority; //! Set to AllowFreeThreshold
+    unsigned int nBestSeenHeight;
+    struct TxStatsInfo
+    {
+        TxConfirmStats *stats;
+        unsigned int blockHeight;
+        unsigned int bucketIndex;
+        TxStatsInfo() : stats(NULL), blockHeight(0), bucketIndex(0) {}
+    };
+
+    // map of txids to information about that transaction
+    std::map<uint256, TxStatsInfo> mapMemPoolTxs;
+
+    /** Classes to track historical data on transaction confirmations */
+    TxConfirmStats feeStats, priStats;
+
+    /** Breakpoints to help determine whether a transaction was confirmed by priority or Fee */
+    CFeeRate feeLikely, feeUnlikely;
+    double priLikely, priUnlikely;
+};
+#endif /*BITCOIN_POLICYESTIMATOR_H */
