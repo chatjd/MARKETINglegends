@@ -85,4 +85,65 @@ struct PaymentDisclosurePayload {
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action) {
         READWRITE(marker);
-        READWRITE(vers
+        READWRITE(version);
+        READWRITE(esk);
+        READWRITE(txid);
+        READWRITE(js);
+        READWRITE(n);
+        READWRITE(zaddr);
+        READWRITE(message);
+    }
+
+    std::string ToString() const;
+
+    friend bool operator==(const PaymentDisclosurePayload& a, const PaymentDisclosurePayload& b) {
+        return (
+            a.version == b.version &&
+            a.esk == b.esk &&
+            a.txid == b.txid &&
+            a.js == b.js &&
+            a.n == b.n &&
+            a.zaddr == b.zaddr &&
+            a.message == b.message
+            );
+    }
+
+    friend bool operator!=(const PaymentDisclosurePayload& a, const PaymentDisclosurePayload& b) {
+        return !(a == b);
+    }
+};
+
+struct PaymentDisclosure {
+    PaymentDisclosurePayload payload;
+    std::array<unsigned char, 64> payloadSig;
+    // We use boost array because serialize doesn't like char buffer, otherwise we could do: unsigned char payloadSig[64];
+
+    PaymentDisclosure() {};
+    PaymentDisclosure(const PaymentDisclosurePayload payload, const std::array<unsigned char, 64> sig) : payload(payload), payloadSig(sig) {};
+    PaymentDisclosure(const uint256& joinSplitPubKey, const PaymentDisclosureKey& key, const PaymentDisclosureInfo& info, const std::string& message);
+
+    ADD_SERIALIZE_METHODS;
+
+    template <typename Stream, typename Operation>
+    inline void SerializationOp(Stream& s, Operation ser_action) {
+        READWRITE(payload);
+        READWRITE(payloadSig);
+    }
+
+    std::string ToString() const;
+
+    friend bool operator==(const PaymentDisclosure& a, const PaymentDisclosure& b) {
+        return (a.payload == b.payload && a.payloadSig == b.payloadSig);
+    }
+
+    friend bool operator!=(const PaymentDisclosure& a, const PaymentDisclosure& b) {
+        return !(a == b);
+    }
+};
+
+
+
+typedef std::pair<PaymentDisclosureKey, PaymentDisclosureInfo> PaymentDisclosureKeyInfo;
+
+
+#endif // VIDULUM_PAYMENTDISCLOSURE_H
