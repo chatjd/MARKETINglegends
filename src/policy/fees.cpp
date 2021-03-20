@@ -223,4 +223,162 @@ void TxConfirmStats::Read(CAutoFile& filein)
         if (fileConfAvg[i].size() != numBuckets)
             throw std::runtime_error("Corrupt estimates file. Mismatch in fee/pri conf average bucket count");
     }
+    // Now that we've processed the entire fee estimate data file and not
+    // thrown any errors, we can copy it to our data structures
+    decay = fileDecay;
+    buckets = fileBuckets;
+    avg = fileAvg;
+    confAvg = fileConfAvg;
+    txCtAvg = fileTxCtAvg;
+    bucketMap.clear();
+
+    // Resize the current block variables which aren't stored in the data file
+    // to match the number of confirms and buckets
+    curBlockConf.resize(maxConfirms);
+    for (unsigned int i = 0; i < maxConfirms; i++) {
+        curBlockConf[i].resize(buckets.size());
+    }
+    curBlockTxCt.resize(buckets.size());
+    curBlockVal.resize(buckets.size());
+
+    unconfTxs.resize(maxConfirms);
+    for (unsigned int i = 0; i < maxConfirms; i++) {
+        unconfTxs[i].resize(buckets.size());
+    }
+    oldUnconfTxs.resize(buckets.size());
+
+    for (unsigned int i = 0; i < buckets.size(); i++)
+        bucketMap[buckets[i]] = i;
+
+    LogPrint("estimatefee", "Reading estimates: %u %s buckets counting confirms up to %u blocks\n",
+             numBuckets, dataTypeString, maxConfirms);
+}
+
+unsigned int TxConfirmStats::NewTx(unsigned int nBlockHeight, double val)
+{
+    unsigned int bucketindex = FindBucketIndex(val);
+    unsigned int blockIndex = nBlockHeight % unconfTxs.size();
+    unconfTxs[blockIndex][bucketindex]++;
+    LogPrint("estimatefee", "adding to %s", dataTypeString);
+    return bucketindex;
+}
+
+void TxConfirmStats::removeTx(unsigned int entryHeight, unsigned int nBestSeenHeight, unsigned int bucketindex)
+{
+    //nBestSeenHeight is not updated yet for the new block
+    int blocksAgo = nBestSeenHeight - entryHeight;
+    if (nBestSeenHeight == 0)  // the BlockPolicyEstimator hasn't seen any blocks yet
+        blocksAgo = 0;
+    if (blocksAgo < 0) {
+        LogPrint("estimatefee", "Blockpolicy error, blocks ago is negative for mempool tx\n");
+        return;  //This can't happen because we call this with our best seen height, no entries can have higher
+    }
+
+    if (blocksAgo >= (int)unconfTxs.size()) {
+        if (oldUnconfTxs[bucketindex] > 0)
+            oldUnconfTxs[bucketindex]--;
+        else
+            LogPrint("estimatefee", "Blockpolicy error, mempool tx removed from >25 blocks,bucketIndex=%u already\n",
+                     bucketindex);
+    }
+    else {
+        unsigned int blockIndex = entryHeight % unconfTxs.size();
+        if (unconfTxs[blockIndex][bucketindex] > 0)
+            unconfTxs[blockIndex][bucketindex]--;
+        else
+            LogPrint("estimatefee", "Blockpolicy error, mempool tx removed from blockIndex=%u,bucketIndex=%u already\n",
+                     blockIndex, bucketindex);
+    }
+}
+
+void CBlockPolicyEstimator::removeTx(uint256 hash)
+{
+    std::map<uint256, TxStatsInfo>::iterator pos = mapMemPoolTxs.find(hash);
+    if (pos == mapMemPoolTxs.end()) {
+        LogPrint("estimatefee", "Blockpolicy error mempool tx %s not found for removeTx\n",
+                 hash.ToString().c_str());
+        return;
+    }
+    TxConfirmStats *stats = pos->second.stats;
+    unsigned int entryHeight = pos->second.blockHeight;
+    unsigned int bucketIndex = pos->second.bucketIndex;
+
+    if (stats != NULL)
+        stats->removeTx(entryHeight, nBestSeenHeight, bucketIndex);
+    mapMemPoolTxs.erase(hash);
+}
+
+CBlockPolicyEstimator::CBlockPolicyEstimator(const CFeeRate& _minRelayFee)
+    : nBestSeenHeight(0)
+{
+    minTrackedFee = _minRelayFee < CFeeRate(MIN_FEERATE) ? CFeeRate(MIN_FEERATE) : _minRelayFee;
+    std::vector<double> vfeelist;
+    for (double bucketBoundary = minTrackedFee.GetFeePerK(); bucketBoundary <= MAX_FEERATE; bucketBoundary *= FEE_SPACING) {
+        vfeelist.push_back(bucketBoundary);
+    }
+    feeStats.Initialize(vfeelist, MAX_BLOCK_CONFIRMS, DEFAULT_DECAY, "FeeRate");
+
+    minTrackedPriority = AllowFreeThreshold() < MIN_PRIORITY ? MIN_PRIORITY : AllowFreeThreshold();
+    std::vector<double> vprilist;
+    for (double bucketBoundary = minTrackedPriority; bucketBoundary <= MAX_PRIORITY; bucketBoundary *= PRI_SPACING) {
+        vprilist.push_back(bucketBoundary);
+    }
+    priStats.Initialize(vprilist, MAX_BLOCK_CONFIRMS, DEFAULT_DECAY, "Priority");
+
+    feeUnlikely = CFeeRate(0);
+    feeLikely = CFeeRate(INF_FEERATE);
+    priUnlikely = 0;
+    priLikely = INF_PRIORITY;
+}
+
+bool CBlockPolicyEstimator::isFeeDataPoint(const CFeeRate &fee, double pri)
+{
+    if ((pri < minTrackedPriority && fee >= minTrackedFee) ||
+        (pri < priUnlikely && fee > feeLikely)) {
+        return true;
+    }
+    return false;
+}
+
+bool CBlockPolicyEstimator::isPriDataPoint(const CFeeRate &fee, double pri)
+{
+    if ((fee < minTrackedFee && pri >= minTrackedPriority) ||
+        (fee < feeUnlikely && pri > priLikely)) {
+        return true;
+    }
+    return false;
+}
+
+void CBlockPolicyEstimator::processTransaction(const CTxMemPoolEntry& entry, bool fCurrentEstimate)
+{
+    unsigned int txHeight = entry.GetHeight();
+    uint256 hash = entry.GetTx().GetHash();
+    if (mapMemPoolTxs[hash].stats != NULL) {
+        LogPrint("estimatefee", "Blockpolicy error mempool tx %s already being tracked\n",
+                 hash.ToString().c_str());
+	return;
+    }
+
+    if (txHeight < nBestSeenHeight) {
+        // Ignore side chains and re-orgs; assuming they are random they don't
+        // affect the estimate.  We'll potentially double count transactions in 1-block reorgs.
+        return;
+    }
+
+    // Only want to be updating estimates when our blockchain is synced,
+    // otherwise we'll miscalculate how many blocks its taking to get included.
+    if (!fCurrentEstimate)
+        return;
+
+    if (!entry.WasClearAtEntry()) {
+        // This transaction depends on other transactions in the mempool to
+        // be included in a block before it will be able to be included, so
+        // we shouldn't include it in our calculations
+        return;
+    }
+
+    // Fees are stored and reported as BTC-per-kb:
+    CFeeRate feeRate(entry.GetFee(), entry.GetTxSize());
+
+    // Want the priority of the tx at confirmation. However we don't know
  
