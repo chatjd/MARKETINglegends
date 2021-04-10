@@ -220,4 +220,133 @@ CMutableTransaction::CMutableTransaction(const CTransaction& tx) : nVersion(tx.n
     
 }
 
-uint25
+uint256 CMutableTransaction::GetHash() const
+{
+    return SerializeHash(*this);
+}
+
+void CTransaction::UpdateHash() const
+{
+    *const_cast<uint256*>(&hash) = SerializeHash(*this);
+}
+
+CTransaction::CTransaction() : nVersion(CTransaction::SPROUT_MIN_CURRENT_VERSION), fOverwintered(false), nVersionGroupId(0), nExpiryHeight(0), vin(), vout(), nLockTime(0), valueBalance(0), vShieldedSpend(), vShieldedOutput(), vjoinsplit(), joinSplitPubKey(), joinSplitSig(), bindingSig() { }
+
+CTransaction::CTransaction(const CMutableTransaction &tx) : nVersion(tx.nVersion), fOverwintered(tx.fOverwintered), nVersionGroupId(tx.nVersionGroupId), nExpiryHeight(tx.nExpiryHeight),
+                                                            vin(tx.vin), vout(tx.vout), nLockTime(tx.nLockTime),
+                                                            valueBalance(tx.valueBalance), vShieldedSpend(tx.vShieldedSpend), vShieldedOutput(tx.vShieldedOutput),
+                                                            vjoinsplit(tx.vjoinsplit), joinSplitPubKey(tx.joinSplitPubKey), joinSplitSig(tx.joinSplitSig),
+                                                            bindingSig(tx.bindingSig)
+{
+    UpdateHash();
+}
+
+// Protected constructor which only derived classes can call.
+// For developer testing only.
+CTransaction::CTransaction(
+    const CMutableTransaction &tx,
+    bool evilDeveloperFlag) : nVersion(tx.nVersion), fOverwintered(tx.fOverwintered), nVersionGroupId(tx.nVersionGroupId), nExpiryHeight(tx.nExpiryHeight),
+                              vin(tx.vin), vout(tx.vout), nLockTime(tx.nLockTime),
+                              valueBalance(tx.valueBalance), vShieldedSpend(tx.vShieldedSpend), vShieldedOutput(tx.vShieldedOutput),
+                              vjoinsplit(tx.vjoinsplit), joinSplitPubKey(tx.joinSplitPubKey), joinSplitSig(tx.joinSplitSig),
+                              bindingSig(tx.bindingSig)
+{
+    assert(evilDeveloperFlag);
+}
+
+CTransaction::CTransaction(CMutableTransaction &&tx) : nVersion(tx.nVersion), fOverwintered(tx.fOverwintered), nVersionGroupId(tx.nVersionGroupId),
+                                                       vin(std::move(tx.vin)), vout(std::move(tx.vout)), nLockTime(tx.nLockTime), nExpiryHeight(tx.nExpiryHeight),
+                                                       valueBalance(tx.valueBalance),
+                                                       vShieldedSpend(std::move(tx.vShieldedSpend)), vShieldedOutput(std::move(tx.vShieldedOutput)),
+                                                       vjoinsplit(std::move(tx.vjoinsplit)),
+                                                       joinSplitPubKey(std::move(tx.joinSplitPubKey)), joinSplitSig(std::move(tx.joinSplitSig))
+{
+    UpdateHash();
+}
+
+CTransaction& CTransaction::operator=(const CTransaction &tx) {
+    *const_cast<bool*>(&fOverwintered) = tx.fOverwintered;
+    *const_cast<int*>(&nVersion) = tx.nVersion;
+    *const_cast<uint32_t*>(&nVersionGroupId) = tx.nVersionGroupId;
+    *const_cast<std::vector<CTxIn>*>(&vin) = tx.vin;
+    *const_cast<std::vector<CTxOut>*>(&vout) = tx.vout;
+    *const_cast<unsigned int*>(&nLockTime) = tx.nLockTime;
+    *const_cast<uint32_t*>(&nExpiryHeight) = tx.nExpiryHeight;
+    *const_cast<CAmount*>(&valueBalance) = tx.valueBalance;
+    *const_cast<std::vector<SpendDescription>*>(&vShieldedSpend) = tx.vShieldedSpend;
+    *const_cast<std::vector<OutputDescription>*>(&vShieldedOutput) = tx.vShieldedOutput;
+    *const_cast<std::vector<JSDescription>*>(&vjoinsplit) = tx.vjoinsplit;
+    *const_cast<uint256*>(&joinSplitPubKey) = tx.joinSplitPubKey;
+    *const_cast<joinsplit_sig_t*>(&joinSplitSig) = tx.joinSplitSig;
+    *const_cast<binding_sig_t*>(&bindingSig) = tx.bindingSig;
+    *const_cast<uint256*>(&hash) = tx.hash;
+    return *this;
+}
+
+CAmount CTransaction::GetValueOut() const
+{
+    CAmount nValueOut = 0;
+    for (std::vector<CTxOut>::const_iterator it(vout.begin()); it != vout.end(); ++it)
+    {
+        nValueOut += it->nValue;
+        if (!MoneyRange(it->nValue) || !MoneyRange(nValueOut))
+            throw std::runtime_error("CTransaction::GetValueOut(): value out of range");
+    }
+
+    if (valueBalance <= 0) {
+        // NB: negative valueBalance "takes" money from the transparent value pool just as outputs do
+        nValueOut += -valueBalance;
+
+        if (!MoneyRange(-valueBalance) || !MoneyRange(nValueOut)) {
+            throw std::runtime_error("CTransaction::GetValueOut(): value out of range");
+        }
+    }
+
+    for (std::vector<JSDescription>::const_iterator it(vjoinsplit.begin()); it != vjoinsplit.end(); ++it)
+    {
+        // NB: vpub_old "takes" money from the transparent value pool just as outputs do
+        nValueOut += it->vpub_old;
+
+        if (!MoneyRange(it->vpub_old) || !MoneyRange(nValueOut))
+            throw std::runtime_error("CTransaction::GetValueOut(): value out of range");
+    }
+    return nValueOut;
+}
+
+CAmount CTransaction::GetShieldedValueIn() const
+{
+    CAmount nValue = 0;
+
+    if (valueBalance >= 0) {
+        // NB: positive valueBalance "gives" money to the transparent value pool just as inputs do
+        nValue += valueBalance;
+
+        if (!MoneyRange(valueBalance) || !MoneyRange(nValue)) {
+            throw std::runtime_error("CTransaction::GetShieldedValueIn(): value out of range");
+        }
+    }
+
+    for (std::vector<JSDescription>::const_iterator it(vjoinsplit.begin()); it != vjoinsplit.end(); ++it)
+    {
+        // NB: vpub_new "gives" money to the transparent value pool just as inputs do
+        nValue += it->vpub_new;
+
+        if (!MoneyRange(it->vpub_new) || !MoneyRange(nValue))
+            throw std::runtime_error("CTransaction::GetShieldedValueIn(): value out of range");
+    }
+
+    return nValue;
+}
+
+double CTransaction::ComputePriority(double dPriorityInputs, unsigned int nTxSize) const
+{
+    nTxSize = CalculateModifiedSize(nTxSize);
+    if (nTxSize == 0) return 0.0;
+
+    return dPriorityInputs / nTxSize;
+}
+
+unsigned int CTransaction::CalculateModifiedSize(unsigned int nTxSize) const
+{
+    // In order to avoid disincentivizing cleaning up the UTXO set we don't count
+    // the constant overhead for each txin and up to 1
