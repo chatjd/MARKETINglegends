@@ -349,4 +349,58 @@ double CTransaction::ComputePriority(double dPriorityInputs, unsigned int nTxSiz
 unsigned int CTransaction::CalculateModifiedSize(unsigned int nTxSize) const
 {
     // In order to avoid disincentivizing cleaning up the UTXO set we don't count
-    // the constant overhead for each txin and up to 1
+    // the constant overhead for each txin and up to 110 bytes of scriptSig (which
+    // is enough to cover a compressed pubkey p2sh redemption) for priority.
+    // Providing any more cleanup incentive than making additional inputs free would
+    // risk encouraging people to create junk outputs to redeem later.
+    if (nTxSize == 0)
+        nTxSize = ::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION);
+    for (std::vector<CTxIn>::const_iterator it(vin.begin()); it != vin.end(); ++it)
+    {
+        unsigned int offset = 41U + std::min(110U, (unsigned int)it->scriptSig.size());
+        if (nTxSize > offset)
+            nTxSize -= offset;
+    }
+    return nTxSize;
+}
+
+std::string CTransaction::ToString() const
+{
+    std::string str;
+    if (!fOverwintered) {
+        str += strprintf("CTransaction(hash=%s, ver=%d, vin.size=%u, vout.size=%u, nLockTime=%u)\n",
+            GetHash().ToString().substr(0,10),
+            nVersion,
+            vin.size(),
+            vout.size(),
+            nLockTime);
+    } else if (nVersion >= SAPLING_MIN_TX_VERSION) {
+        str += strprintf("CTransaction(hash=%s, ver=%d, fOverwintered=%d, nVersionGroupId=%08x, vin.size=%u, vout.size=%u, nLockTime=%u, nExpiryHeight=%u, valueBalance=%u, vShieldedSpend.size=%u, vShieldedOutput.size=%u)\n",
+            GetHash().ToString().substr(0,10),
+            nVersion,
+            fOverwintered,
+            nVersionGroupId,
+            vin.size(),
+            vout.size(),
+            nLockTime,
+            nExpiryHeight,
+            valueBalance,
+            vShieldedSpend.size(),
+            vShieldedOutput.size());
+    } else if (nVersion >= 3) {
+        str += strprintf("CTransaction(hash=%s, ver=%d, fOverwintered=%d, nVersionGroupId=%08x, vin.size=%u, vout.size=%u, nLockTime=%u, nExpiryHeight=%u)\n",
+            GetHash().ToString().substr(0,10),
+            nVersion,
+            fOverwintered,
+            nVersionGroupId,
+            vin.size(),
+            vout.size(),
+            nLockTime,
+            nExpiryHeight);
+    }
+    for (unsigned int i = 0; i < vin.size(); i++)
+        str += "    " + vin[i].ToString() + "\n";
+    for (unsigned int i = 0; i < vout.size(); i++)
+        str += "    " + vout[i].ToString() + "\n";
+    return str;
+}
