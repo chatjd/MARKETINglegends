@@ -536,4 +536,87 @@ static bool rest_getutxos(HTTPRequest* req, const std::string& strURIPart)
         ssGetUTXOResponse << chainActive.Height() << chainActive.Tip()->GetBlockHash() << bitmap << outs;
         string ssGetUTXOResponseString = ssGetUTXOResponse.str();
 
-        req->WriteHeader("Content-Type", "applicatio
+        req->WriteHeader("Content-Type", "application/octet-stream");
+        req->WriteReply(HTTP_OK, ssGetUTXOResponseString);
+        return true;
+    }
+
+    case RF_HEX: {
+        CDataStream ssGetUTXOResponse(SER_NETWORK, PROTOCOL_VERSION);
+        ssGetUTXOResponse << chainActive.Height() << chainActive.Tip()->GetBlockHash() << bitmap << outs;
+        string strHex = HexStr(ssGetUTXOResponse.begin(), ssGetUTXOResponse.end()) + "\n";
+
+        req->WriteHeader("Content-Type", "text/plain");
+        req->WriteReply(HTTP_OK, strHex);
+        return true;
+    }
+
+    case RF_JSON: {
+        UniValue objGetUTXOResponse(UniValue::VOBJ);
+
+        // pack in some essentials
+        // use more or less the same output as mentioned in Bip64
+        objGetUTXOResponse.push_back(Pair("chainHeight", chainActive.Height()));
+        objGetUTXOResponse.push_back(Pair("chaintipHash", chainActive.Tip()->GetBlockHash().GetHex()));
+        objGetUTXOResponse.push_back(Pair("bitmap", bitmapStringRepresentation));
+
+        UniValue utxos(UniValue::VARR);
+        BOOST_FOREACH (const CCoin& coin, outs) {
+            UniValue utxo(UniValue::VOBJ);
+            utxo.push_back(Pair("txvers", (int32_t)coin.nTxVer));
+            utxo.push_back(Pair("height", (int32_t)coin.nHeight));
+            utxo.push_back(Pair("value", ValueFromAmount(coin.out.nValue)));
+
+            // include the script in a json output
+            UniValue o(UniValue::VOBJ);
+            ScriptPubKeyToJSON(coin.out.scriptPubKey, o, true);
+            utxo.push_back(Pair("scriptPubKey", o));
+            utxos.push_back(utxo);
+        }
+        objGetUTXOResponse.push_back(Pair("utxos", utxos));
+
+        // return json string
+        string strJSON = objGetUTXOResponse.write() + "\n";
+        req->WriteHeader("Content-Type", "application/json");
+        req->WriteReply(HTTP_OK, strJSON);
+        return true;
+    }
+    default: {
+        return RESTERR(req, HTTP_NOT_FOUND, "output format not found (available: " + AvailableDataFormatsString() + ")");
+    }
+    }
+
+    // not reached
+    return true; // continue to process further HTTP reqs on this cxn
+}
+
+static const struct {
+    const char* prefix;
+    bool (*handler)(HTTPRequest* req, const std::string& strReq);
+} uri_prefixes[] = {
+      {"/rest/tx/", rest_tx},
+      {"/rest/block/notxdetails/", rest_block_notxdetails},
+      {"/rest/block/", rest_block_extended},
+      {"/rest/chaininfo", rest_chaininfo},
+      {"/rest/mempool/info", rest_mempool_info},
+      {"/rest/mempool/contents", rest_mempool_contents},
+      {"/rest/headers/", rest_headers},
+      {"/rest/getutxos", rest_getutxos},
+};
+
+bool StartREST()
+{
+    for (unsigned int i = 0; i < ARRAYLEN(uri_prefixes); i++)
+        RegisterHTTPHandler(uri_prefixes[i].prefix, false, uri_prefixes[i].handler);
+    return true;
+}
+
+void InterruptREST()
+{
+}
+
+void StopREST()
+{
+    for (unsigned int i = 0; i < ARRAYLEN(uri_prefixes); i++)
+        UnregisterHTTPHandler(uri_prefixes[i].prefix, false);
+}
