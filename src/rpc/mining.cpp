@@ -384,3 +384,626 @@ UniValue getmininginfo(const UniValue& params, bool fHelp)
     obj.push_back(Pair("generate",         getgenerate(params, false)));
 #endif
     return obj;
+}
+
+
+// NOTE: Unlike wallet RPC (which use BTC values), mining RPCs follow GBT (BIP 22) in using satoshi amounts
+UniValue prioritisetransaction(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 3)
+        throw runtime_error(
+            "prioritisetransaction <txid> <priority delta> <fee delta>\n"
+            "Accepts the transaction into mined blocks at a higher (or lower) priority\n"
+            "\nArguments:\n"
+            "1. \"txid\"       (string, required) The transaction id.\n"
+            "2. priority delta (numeric, required) The priority to add or subtract.\n"
+            "                  The transaction selection algorithm considers the tx as it would have a higher priority.\n"
+            "                  (priority of a transaction is calculated: coinage * value_in_satoshis / txsize) \n"
+            "3. fee delta      (numeric, required) The fee value (in satoshis) to add (or subtract, if negative).\n"
+            "                  The fee is not actually paid, only the algorithm for selecting transactions into a block\n"
+            "                  considers the transaction as it would have paid a higher (or lower) fee.\n"
+            "\nResult\n"
+            "true              (boolean) Returns true\n"
+            "\nExamples:\n"
+            + HelpExampleCli("prioritisetransaction", "\"txid\" 0.0 10000")
+            + HelpExampleRpc("prioritisetransaction", "\"txid\", 0.0, 10000")
+        );
+
+    LOCK(cs_main);
+
+    uint256 hash = ParseHashStr(params[0].get_str(), "txid");
+    CAmount nAmount = params[2].get_int64();
+
+    mempool.PrioritiseTransaction(hash, params[0].get_str(), params[1].get_real(), nAmount);
+    return true;
+}
+
+
+// NOTE: Assumes a conclusive result; if result is inconclusive, it must be handled by caller
+static UniValue BIP22ValidationResult(const CValidationState& state)
+{
+    if (state.IsValid())
+        return NullUniValue;
+
+    std::string strRejectReason = state.GetRejectReason();
+    if (state.IsError())
+        throw JSONRPCError(RPC_VERIFY_ERROR, strRejectReason);
+    if (state.IsInvalid())
+    {
+        if (strRejectReason.empty())
+            return "rejected";
+        return strRejectReason;
+    }
+    // Should be impossible
+    return "valid?";
+}
+
+UniValue getblocktemplate(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() > 1)
+        throw runtime_error(
+            "getblocktemplate ( \"jsonrequestobject\" )\n"
+            "\nIf the request parameters include a 'mode' key, that is used to explicitly select between the default 'template' request or a 'proposal'.\n"
+            "It returns data needed to construct a block to work on.\n"
+            "See https://en.bitcoin.it/wiki/BIP_0022 for full specification.\n"
+
+            "\nArguments:\n"
+            "1. \"jsonrequestobject\"       (string, optional) A json object in the following spec\n"
+            "     {\n"
+            "       \"mode\":\"template\"    (string, optional) This must be set to \"template\" or omitted\n"
+            "       \"capabilities\":[       (array, optional) A list of strings\n"
+            "           \"support\"           (string) client side supported feature, 'longpoll', 'coinbasetxn', 'coinbasevalue', 'proposal', 'serverlist', 'workid'\n"
+            "           ,...\n"
+            "         ]\n"
+            "     }\n"
+            "\n"
+
+            "\nResult:\n"
+            "{\n"
+            "  \"version\" : n,                     (numeric) The block version\n"
+            "  \"previousblockhash\" : \"xxxx\",    (string) The hash of current highest block\n"
+            "  \"finalsaplingroothash\" : \"xxxx\", (string) The hash of the final sapling root\n"
+            "  \"transactions\" : [                 (array) contents of non-coinbase transactions that should be included in the next block\n"
+            "      {\n"
+            "         \"data\" : \"xxxx\",          (string) transaction data encoded in hexadecimal (byte-for-byte)\n"
+            "         \"hash\" : \"xxxx\",          (string) hash/id encoded in little-endian hexadecimal\n"
+            "         \"depends\" : [              (array) array of numbers \n"
+            "             n                        (numeric) transactions before this one (by 1-based index in 'transactions' list) that must be present in the final block if this one is\n"
+            "             ,...\n"
+            "         ],\n"
+            "         \"fee\": n,                   (numeric) difference in value between transaction inputs and outputs (in Satoshis); for coinbase transactions, this is a negative Number of the total collected block fees (ie, not including the block subsidy); if key is not present, fee is unknown and clients MUST NOT assume there isn't one\n"
+            "         \"sigops\" : n,               (numeric) total number of SigOps, as counted for purposes of block limits; if key is not present, sigop count is unknown and clients MUST NOT assume there aren't any\n"
+            "         \"required\" : true|false     (boolean) if provided and true, this transaction must be in the final block\n"
+            "      }\n"
+            "      ,...\n"
+            "  ],\n"
+//            "  \"coinbaseaux\" : {                  (json object) data that should be included in the coinbase's scriptSig content\n"
+//            "      \"flags\" : \"flags\"            (string) \n"
+//            "  },\n"
+//            "  \"coinbasevalue\" : n,               (numeric) maximum allowable input to coinbase transaction, including the generation award and transaction fees (in Satoshis)\n"
+            "  \"coinbasetxn\" : { ... },           (json object) information for coinbase transaction\n"
+            "  \"target\" : \"xxxx\",               (string) The hash target\n"
+            "  \"mintime\" : xxx,                   (numeric) The minimum timestamp appropriate for next block time in seconds since epoch (Jan 1 1970 GMT)\n"
+            "  \"mutable\" : [                      (array of string) list of ways the block template may be changed \n"
+            "     \"value\"                         (string) A way the block template may be changed, e.g. 'time', 'transactions', 'prevblock'\n"
+            "     ,...\n"
+            "  ],\n"
+            "  \"noncerange\" : \"00000000ffffffff\",   (string) A range of valid nonces\n"
+            "  \"sigoplimit\" : n,                 (numeric) limit of sigops in blocks\n"
+            "  \"sizelimit\" : n,                  (numeric) limit of block size\n"
+            "  \"curtime\" : ttt,                  (numeric) current timestamp in seconds since epoch (Jan 1 1970 GMT)\n"
+            "  \"bits\" : \"xxx\",                 (string) compressed target of next block\n"
+            "  \"height\" : n                      (numeric) The height of the next block\n"
+            "  \"payee\" : \"xxx\",                (string) required payee for the next block\n"
+            "  \"payee_amount\" : n,               (numeric) required amount to pay\n"
+            "  \"votes\" : [\n                     (array) show vote candidates\n"
+            "        { ... }                       (json object) vote candidate\n"
+            "        ,...\n"
+            "  ],\n"
+            "  \"masternode_payments\" : true|false,         (boolean) true, if masternode payments are enabled\n"
+            "  \"enforce_masternode_payments\" : true|false  (boolean) true, if masternode payments are enforced\n"
+            "  \"vrsAddress\" :                    (string) vidulum reward system address\n"
+            "}\n"
+
+            "\nExamples:\n"
+            + HelpExampleCli("getblocktemplate", "")
+            + HelpExampleRpc("getblocktemplate", "")
+         );
+
+    LOCK(cs_main);
+
+    // Wallet or miner address is required because we support coinbasetxn
+    if (GetArg("-mineraddress", "").empty()) {
+#ifdef ENABLE_WALLET
+        if (!pwalletMain) {
+            throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Wallet disabled and -mineraddress not set");
+        }
+#else
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "vidulumd compiled without wallet and -mineraddress not set");
+#endif
+    }
+
+    std::string strMode = "template";
+    UniValue lpval = NullUniValue;
+    // TODO: Re-enable coinbasevalue once a specification has been written
+    bool coinbasetxn = true;
+    if (params.size() > 0)
+    {
+        const UniValue& oparam = params[0].get_obj();
+        const UniValue& modeval = find_value(oparam, "mode");
+        if (modeval.isStr())
+            strMode = modeval.get_str();
+        else if (modeval.isNull())
+        {
+            /* Do nothing */
+        }
+        else
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid mode");
+        lpval = find_value(oparam, "longpollid");
+
+        if (strMode == "proposal")
+        {
+            const UniValue& dataval = find_value(oparam, "data");
+            if (!dataval.isStr())
+                throw JSONRPCError(RPC_TYPE_ERROR, "Missing data String key for proposal");
+
+            CBlock block;
+            if (!DecodeHexBlk(block, dataval.get_str()))
+                throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "Block decode failed");
+
+            uint256 hash = block.GetHash();
+            BlockMap::iterator mi = mapBlockIndex.find(hash);
+            if (mi != mapBlockIndex.end()) {
+                CBlockIndex *pindex = mi->second;
+                if (pindex->IsValid(BLOCK_VALID_SCRIPTS))
+                    return "duplicate";
+                if (pindex->nStatus & BLOCK_FAILED_MASK)
+                    return "duplicate-invalid";
+                return "duplicate-inconclusive";
+            }
+
+            CBlockIndex* const pindexPrev = chainActive.Tip();
+            // TestBlockValidity only supports blocks built on the current Tip
+            if (block.hashPrevBlock != pindexPrev->GetBlockHash())
+                return "inconclusive-not-best-prevblk";
+            CValidationState state;
+            TestBlockValidity(state, block, pindexPrev, false, true);
+            return BIP22ValidationResult(state);
+        }
+    }
+
+    if (strMode != "template")
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid mode");
+
+    if (vNodes.empty())
+        throw JSONRPCError(RPC_CLIENT_NOT_CONNECTED, "Vidulum is not connected!");
+
+    if (IsInitialBlockDownload())
+        throw JSONRPCError(RPC_CLIENT_IN_INITIAL_DOWNLOAD, "Vidulum is downloading blocks...");
+
+    static unsigned int nTransactionsUpdatedLast;
+
+    if (!lpval.isNull())
+    {
+        // Wait to respond until either the best block changes, OR a minute has passed and there are more transactions
+        uint256 hashWatchedChain;
+        boost::system_time checktxtime;
+        unsigned int nTransactionsUpdatedLastLP;
+
+        if (lpval.isStr())
+        {
+            // Format: <hashBestChain><nTransactionsUpdatedLast>
+            std::string lpstr = lpval.get_str();
+
+            hashWatchedChain.SetHex(lpstr.substr(0, 64));
+            nTransactionsUpdatedLastLP = atoi64(lpstr.substr(64));
+        }
+        else
+        {
+            // NOTE: Spec does not specify behaviour for non-string longpollid, but this makes testing easier
+            hashWatchedChain = chainActive.Tip()->GetBlockHash();
+            nTransactionsUpdatedLastLP = nTransactionsUpdatedLast;
+        }
+
+        // Release the wallet and main lock while waiting
+        LEAVE_CRITICAL_SECTION(cs_main);
+        {
+            checktxtime = boost::get_system_time() + boost::posix_time::minutes(1);
+
+            boost::unique_lock<boost::mutex> lock(csBestBlock);
+            while (chainActive.Tip()->GetBlockHash() == hashWatchedChain && IsRPCRunning())
+            {
+                if (!cvBlockChange.timed_wait(lock, checktxtime))
+                {
+                    // Timeout: Check transactions for update
+                    if (mempool.GetTransactionsUpdated() != nTransactionsUpdatedLastLP)
+                        break;
+                    checktxtime += boost::posix_time::seconds(10);
+                }
+            }
+        }
+        ENTER_CRITICAL_SECTION(cs_main);
+
+        if (!IsRPCRunning())
+            throw JSONRPCError(RPC_CLIENT_NOT_CONNECTED, "Shutting down");
+        // TODO: Maybe recheck connections/IBD and (if something wrong) send an expires-immediately template to stop miners?
+    }
+
+    // Update block
+    static CBlockIndex* pindexPrev;
+    static int64_t nStart;
+    static CBlockTemplate* pblocktemplate;
+    if (pindexPrev != chainActive.Tip() ||
+        (mempool.GetTransactionsUpdated() != nTransactionsUpdatedLast && GetTime() - nStart > 5))
+    {
+        // Clear pindexPrev so future calls make a new block, despite any failures from here on
+        pindexPrev = NULL;
+
+        // Store the pindexBest used before CreateNewBlockWithKey, to avoid races
+        nTransactionsUpdatedLast = mempool.GetTransactionsUpdated();
+        CBlockIndex* pindexPrevNew = chainActive.Tip();
+        nStart = GetTime();
+
+        // Create new block
+        if(pblocktemplate)
+        {
+            delete pblocktemplate;
+            pblocktemplate = NULL;
+        }
+#ifdef ENABLE_WALLET
+        CReserveKey reservekey(pwalletMain);
+        pblocktemplate = CreateNewBlockWithKey(reservekey);
+#else
+        pblocktemplate = CreateNewBlockWithKey();
+#endif
+        if (!pblocktemplate)
+            throw JSONRPCError(RPC_OUT_OF_MEMORY, "Out of memory");
+
+        // Need to update only after we know CreateNewBlockWithKey succeeded
+        pindexPrev = pindexPrevNew;
+    }
+    CBlock* pblock = &pblocktemplate->block; // pointer for convenience
+
+    int64_t nHeight = pindexPrev->nHeight + 1;
+    
+    // Update nTime
+    UpdateTime(pblock, Params().GetConsensus(), pindexPrev);
+    pblock->nNonce = uint256();
+
+    UniValue aCaps(UniValue::VARR); aCaps.push_back("proposal");
+
+    UniValue txCoinbase = NullUniValue;
+    UniValue transactions(UniValue::VARR);
+    map<uint256, int64_t> setTxIndex;
+    int i = 0;
+    BOOST_FOREACH (const CTransaction& tx, pblock->vtx) {
+        uint256 txHash = tx.GetHash();
+        setTxIndex[txHash] = i++;
+
+        if (tx.IsCoinBase() && !coinbasetxn)
+            continue;
+
+        UniValue entry(UniValue::VOBJ);
+
+        entry.push_back(Pair("data", EncodeHexTx(tx)));
+
+        entry.push_back(Pair("hash", txHash.GetHex()));
+
+        UniValue deps(UniValue::VARR);
+        BOOST_FOREACH (const CTxIn &in, tx.vin)
+        {
+            if (setTxIndex.count(in.prevout.hash))
+                deps.push_back(setTxIndex[in.prevout.hash]);
+        }
+        entry.push_back(Pair("depends", deps));
+
+        int index_in_template = i - 1;
+        entry.push_back(Pair("fee", pblocktemplate->vTxFees[index_in_template]));
+        entry.push_back(Pair("sigops", pblocktemplate->vTxSigOps[index_in_template]));
+
+        if (tx.IsCoinBase()) {
+            // Show Vidulum Rewards System if it is required
+            if (pblock->vtx[0].vout.size() > 1 && (nHeight >= Params().GetConsensus().vUpgrades[Consensus::UPGRADE_OVERWINTER].nActivationHeight)) {
+                // Correct this if GetBlockTemplate changes the order
+                entry.push_back(Pair("vrewardsystem", (int64_t)tx.vout[1].nValue));
+            }
+            entry.push_back(Pair("required", true));
+            txCoinbase = entry;
+        } else {
+            transactions.push_back(entry);
+        }
+    }
+
+    UniValue aux(UniValue::VOBJ);
+    aux.push_back(Pair("flags", HexStr(COINBASE_FLAGS.begin(), COINBASE_FLAGS.end())));
+
+    arith_uint256 hashTarget = arith_uint256().SetCompact(pblock->nBits);
+
+    static UniValue aMutable(UniValue::VARR);
+    if (aMutable.empty())
+    {
+        aMutable.push_back("time");
+        aMutable.push_back("transactions");
+        aMutable.push_back("prevblock");
+    }
+
+    UniValue aVotes(UniValue::VARR);
+    UniValue result(UniValue::VOBJ);
+    result.push_back(Pair("capabilities", aCaps));
+    result.push_back(Pair("version", pblock->nVersion));
+    result.push_back(Pair("previousblockhash", pblock->hashPrevBlock.GetHex()));
+    result.push_back(Pair("finalsaplingroothash", pblock->hashFinalSaplingRoot.GetHex()));
+    result.push_back(Pair("transactions", transactions));
+    if (coinbasetxn) {
+        assert(txCoinbase.isObject());
+        result.push_back(Pair("coinbasetxn", txCoinbase));
+    } else {
+        result.push_back(Pair("coinbaseaux", aux));
+        result.push_back(Pair("coinbasevalue", (int64_t)pblock->vtx[0].vout[0].nValue));
+    }
+    result.push_back(Pair("longpollid", chainActive.Tip()->GetBlockHash().GetHex() + i64tostr(nTransactionsUpdatedLast)));
+    result.push_back(Pair("target", hashTarget.GetHex()));
+    result.push_back(Pair("mintime", (int64_t)pindexPrev->GetMedianTimePast()+1));
+    result.push_back(Pair("mutable", aMutable));
+    result.push_back(Pair("noncerange", "00000000ffffffff"));
+    result.push_back(Pair("sigoplimit", (int64_t)MAX_BLOCK_SIGOPS));
+    result.push_back(Pair("sizelimit", (int64_t)MAX_BLOCK_SIZE(chainActive.Tip() ? chainActive.Tip()->nHeight+1 : 0)));
+    result.push_back(Pair("curtime", pblock->GetBlockTime()));
+    result.push_back(Pair("bits", strprintf("%08x", pblock->nBits)));
+    result.push_back(Pair("height", (int64_t)(pindexPrev->nHeight + 1)));
+    result.push_back(Pair("votes", aVotes));
+
+
+    if(pblock->payee != CScript()){
+        CTxDestination address1;
+        ExtractDestination(pblock->payee, address1);
+
+        result.push_back(Pair("payee", EncodeDestination(address1)));
+        CAmount val = pblock->vtx[0].vout[pblock->vtx[0].vout.size() - 1].nValue;
+        result.push_back(Pair("payee_amount", (int64_t)val));
+    } else {
+        result.push_back(Pair("payee", ""));
+        result.push_back(Pair("payee_amount", ""));
+    }
+
+    result.push_back(Pair("masternode_payments", pblock->nTime > Params().StartMasternodePayments() ? "true" : "false"));
+    result.push_back(Pair("enforce_masternode_payments", true));
+
+    CAmount nReward = GetBlockSubsidy(nHeight, Params().GetConsensus());
+
+    if((nHeight >= Params().GetConsensus().vUpgrades[Consensus::UPGRADE_OVERWINTER].nActivationHeight)
+        && (nHeight < Params().GetConsensus().GetLastVRewardSystemBlockHeight())){
+
+        CAmount nVRewardSystem = nReward * 20 / 100;
+        result.push_back(Pair("vrsReward", (int64_t)nVRewardSystem));
+        result.push_back(Pair("vrsAddress", Params().GetVRewardSystemAddressAtHeight(nHeight)));
+    }
+    
+    return result;
+}
+
+class submitblock_StateCatcher : public CValidationInterface
+{
+public:
+    uint256 hash;
+    bool found;
+    CValidationState state;
+
+    submitblock_StateCatcher(const uint256 &hashIn) : hash(hashIn), found(false), state() {};
+
+protected:
+    virtual void BlockChecked(const CBlock& block, const CValidationState& stateIn) {
+        if (block.GetHash() != hash)
+            return;
+        found = true;
+        state = stateIn;
+    };
+};
+
+UniValue submitblock(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() < 1 || params.size() > 2)
+        throw runtime_error(
+            "submitblock \"hexdata\" ( \"jsonparametersobject\" )\n"
+            "\nAttempts to submit new block to network.\n"
+            "The 'jsonparametersobject' parameter is currently ignored.\n"
+            "See https://en.bitcoin.it/wiki/BIP_0022 for full specification.\n"
+
+            "\nArguments\n"
+            "1. \"hexdata\"    (string, required) the hex-encoded block data to submit\n"
+            "2. \"jsonparametersobject\"     (string, optional) object of optional parameters\n"
+            "    {\n"
+            "      \"workid\" : \"id\"    (string, optional) if the server provided a workid, it MUST be included with submissions\n"
+            "    }\n"
+            "\nResult:\n"
+            "\"duplicate\" - node already has valid copy of block\n"
+            "\"duplicate-invalid\" - node already has block, but it is invalid\n"
+            "\"duplicate-inconclusive\" - node already has block but has not validated it\n"
+            "\"inconclusive\" - node has not validated the block, it may not be on the node's current best chain\n"
+            "\"rejected\" - block was rejected as invalid\n"
+            "For more information on submitblock parameters and results, see: https://github.com/bitcoin/bips/blob/master/bip-0022.mediawiki#block-submission\n"
+            "\nExamples:\n"
+            + HelpExampleCli("submitblock", "\"mydata\"")
+            + HelpExampleRpc("submitblock", "\"mydata\"")
+        );
+
+    CBlock block;
+    if (!DecodeHexBlk(block, params[0].get_str()))
+        throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "Block decode failed");
+
+    uint256 hash = block.GetHash();
+    bool fBlockPresent = false;
+    {
+        LOCK(cs_main);
+        BlockMap::iterator mi = mapBlockIndex.find(hash);
+        if (mi != mapBlockIndex.end()) {
+            CBlockIndex *pindex = mi->second;
+            if (pindex->IsValid(BLOCK_VALID_SCRIPTS))
+                return "duplicate";
+            if (pindex->nStatus & BLOCK_FAILED_MASK)
+                return "duplicate-invalid";
+            // Otherwise, we might only have the header - process the block before returning
+            fBlockPresent = true;
+        }
+    }
+
+    CValidationState state;
+    submitblock_StateCatcher sc(block.GetHash());
+    RegisterValidationInterface(&sc);
+    bool fAccepted = ProcessNewBlock(state, NULL, &block, true, NULL);
+    UnregisterValidationInterface(&sc);
+    if (fBlockPresent)
+    {
+        if (fAccepted && !sc.found)
+            return "duplicate-inconclusive";
+        return "duplicate";
+    }
+    if (fAccepted)
+    {
+        if (!sc.found)
+            return "inconclusive";
+        state = sc.state;
+    }
+    return BIP22ValidationResult(state);
+}
+
+UniValue estimatefee(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "estimatefee nblocks\n"
+            "\nEstimates the approximate fee per kilobyte\n"
+            "needed for a transaction to begin confirmation\n"
+            "within nblocks blocks.\n"
+            "\nArguments:\n"
+            "1. nblocks     (numeric)\n"
+            "\nResult:\n"
+            "n :    (numeric) estimated fee-per-kilobyte\n"
+            "\n"
+            "-1.0 is returned if not enough transactions and\n"
+            "blocks have been observed to make an estimate.\n"
+            "\nExample:\n"
+            + HelpExampleCli("estimatefee", "6")
+            );
+
+    RPCTypeCheck(params, boost::assign::list_of(UniValue::VNUM));
+
+    int nBlocks = params[0].get_int();
+    if (nBlocks < 1)
+        nBlocks = 1;
+
+    CFeeRate feeRate = mempool.estimateFee(nBlocks);
+    if (feeRate == CFeeRate(0))
+        return -1.0;
+
+    return ValueFromAmount(feeRate.GetFeePerK());
+}
+
+UniValue estimatepriority(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "estimatepriority nblocks\n"
+            "\nEstimates the approximate priority\n"
+            "a zero-fee transaction needs to begin confirmation\n"
+            "within nblocks blocks.\n"
+            "\nArguments:\n"
+            "1. nblocks     (numeric)\n"
+            "\nResult:\n"
+            "n :    (numeric) estimated priority\n"
+            "\n"
+            "-1.0 is returned if not enough transactions and\n"
+            "blocks have been observed to make an estimate.\n"
+            "\nExample:\n"
+            + HelpExampleCli("estimatepriority", "6")
+            );
+
+    RPCTypeCheck(params, boost::assign::list_of(UniValue::VNUM));
+
+    int nBlocks = params[0].get_int();
+    if (nBlocks < 1)
+        nBlocks = 1;
+
+    return mempool.estimatePriority(nBlocks);
+}
+
+UniValue getblocksubsidy(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() > 1)
+        throw runtime_error(
+            "getblocksubsidy height\n"
+            "\nReturns block subsidy reward, taking into account the Vidulum Rewards System, of block at index provided.\n"
+            "\nArguments:\n"
+            "1. height         (numeric, optional) The block height.  If not provided, defaults to the current height of the chain.\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"miner\" : x.xxx           (numeric) The mining reward amount in " + CURRENCY_UNIT + ".\n"
+            "  \"masternode\" : x.xxx      (numeric) The masternode reward amount in " + CURRENCY_UNIT + ".\n"
+            "  \"vrsReward\" : x.xxx       (numeric) The Vidulum Rewards System amount in " + CURRENCY_UNIT + ".\n"
+            "  \"vrsAddress\" : x.xxx      (alphanumeric) The Vidulum Rewards System address .\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getblocksubsidy", "1000")
+            + HelpExampleRpc("getblockubsidy", "1000")
+        );
+
+    LOCK(cs_main);
+    int nHeight = (params.size()==1) ? params[0].get_int() : chainActive.Height() + 1;
+    if (nHeight < 0)
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Block height out of range");
+
+    CAmount nReward = GetBlockSubsidy(nHeight, Params().GetConsensus());
+    CAmount nVRewardSystem = 0;
+
+    if (nHeight >= Params().GetConsensus().vUpgrades[Consensus::UPGRADE_OVERWINTER].nActivationHeight){
+        
+        if (nHeight < Params().GetConsensus().GetLastVRewardSystemBlockHeight()) {
+            nVRewardSystem = nReward * 20 / 100;
+            nReward -= nVRewardSystem;
+        }
+    }
+
+    CAmount nMasternodeReward = GetMasternodePayment(nHeight, nReward);
+    nReward -= nMasternodeReward;
+
+    UniValue result(UniValue::VOBJ);
+
+    result.push_back(Pair("miner", ValueFromAmount(nReward)));
+    
+
+    if (nHeight >= Params().GetConsensus().vUpgrades[Consensus::UPGRADE_OVERWINTER].nActivationHeight){
+        result.push_back(Pair("vrsReward", ValueFromAmount(nVRewardSystem)));
+        result.push_back(Pair("vrsAddress", Params().GetVRewardSystemAddressAtHeight(nHeight)));
+    }
+    
+    result.push_back(Pair("masternode", ValueFromAmount(nMasternodeReward)));
+    return result;
+}
+
+static const CRPCCommand commands[] =
+{ //  category              name                      actor (function)         okSafeMode
+  //  --------------------- ------------------------  -----------------------  ----------
+    { "mining",             "getlocalsolps",          &getlocalsolps,          true  },
+    { "mining",             "getnetworksolps",        &getnetworksolps,        true  },
+    { "mining",             "getnetworkhashps",       &getnetworkhashps,       true  },
+    { "mining",             "getmininginfo",          &getmininginfo,          true  },
+    { "mining",             "prioritisetransaction",  &prioritisetransaction,  true  },
+    { "mining",             "getblocktemplate",       &getblocktemplate,       true  },
+    { "mining",             "submitblock",            &submitblock,            true  },
+    { "mining",             "getblocksubsidy",        &getblocksubsidy,        true  },
+
+#ifdef ENABLE_MINING
+    { "generating",         "getgenerate",            &getgenerate,            true  },
+    { "generating",         "setgenerate",            &setgenerate,            true  },
+    { "generating",         "generate",               &generate,               true  },
+#endif
+
+    { "util",               "estimatefee",            &estimatefee,            true  },
+    { "util",               "estimatepriority",       &estimatepriority,       true  },
+};
+
+void RegisterMiningRPCCommands(CRPCTable &tableRPC)
+{
+    for (unsigned int vcidx = 0; vcidx < ARRAYLEN(commands); vcidx++)
+        tableRPC.appendCommand(commands[vcidx].name, &commands[vcidx]);
+}
