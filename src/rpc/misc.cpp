@@ -149,4 +149,160 @@ UniValue getalldata(const UniValue& params, bool fHelp)
 
                   nBalance = getBalanceTaddr(strName, nMinDepth, false);
 
-                  addr.p
+                  addr.push_back(Pair("amount", ValueFromAmount(nBalance)));
+                  addr.push_back(Pair("ismine", (mine & ISMINE_SPENDABLE) ? true : false));
+                  addrlist.push_back(Pair(strName, addr));
+              }
+          }
+      }
+
+      //get all z address
+      {
+          std::set<libzcash::SproutPaymentAddress> addresses;
+          pwalletMain->GetSproutPaymentAddresses(addresses);
+          for (auto addr : addresses) {
+              if (pwalletMain->HaveSproutSpendingKey(addr)) {
+                  UniValue address(UniValue::VOBJ);
+                  const string& strName = EncodePaymentAddress(addr);
+                  nBalance = getBalanceZaddr(strName, nMinDepth, false);
+                  address.push_back(Pair("amount", ValueFromAmount(nBalance)));
+                  address.push_back(Pair("ismine", true));
+                  addrlist.push_back(Pair(strName, address));
+              }
+              else
+              {
+                  UniValue address(UniValue::VOBJ);
+                  const string& strName = EncodePaymentAddress(addr);
+                  nBalance = getBalanceZaddr(strName, nMinDepth, false);
+                  address.push_back(Pair("amount", ValueFromAmount(nBalance)));
+                  address.push_back(Pair("ismine", false));
+                  addrlist.push_back(Pair(strName, address));
+              }
+          }
+      }
+      {
+          std::set<libzcash::SaplingPaymentAddress> addresses;
+          pwalletMain->GetSaplingPaymentAddresses(addresses);
+          libzcash::SaplingIncomingViewingKey ivk;
+          libzcash::SaplingFullViewingKey fvk;
+          for (auto addr : addresses) {
+              if (pwalletMain->GetSaplingIncomingViewingKey(addr, ivk) &&
+                  pwalletMain->GetSaplingFullViewingKey(ivk, fvk)) {
+                  if(pwalletMain->HaveSaplingSpendingKey(fvk)) {
+                      UniValue address(UniValue::VOBJ);
+                      const string& strName = EncodePaymentAddress(addr);
+                      nBalance = getBalanceZaddr(strName, nMinDepth, false);
+                      address.push_back(Pair("amount", ValueFromAmount(nBalance)));
+                      address.push_back(Pair("ismine", true));
+                      addrlist.push_back(Pair(strName, address));
+                  }
+                  else
+                  {
+                      UniValue address(UniValue::VOBJ);
+                      const string& strName = EncodePaymentAddress(addr);
+                      nBalance = getBalanceZaddr(strName, nMinDepth, false);
+                      address.push_back(Pair("amount", ValueFromAmount(nBalance)));
+                      address.push_back(Pair("ismine", false));
+                      addrlist.push_back(Pair(strName, address));
+                  }
+              }
+          }
+      }
+    }
+
+    addressbalance.push_back(addrlist);
+    returnObj.push_back(Pair("addressbalance", addressbalance));
+
+
+    //get transactions
+    string strAccount = "";
+    int nCount = 200;
+    int nFrom = 0;
+    isminefilter filter = ISMINE_SPENDABLE;
+
+    UniValue trans(UniValue::VARR);
+    UniValue transTime(UniValue::VARR);
+    if (params.size() > 0 && (params[0].get_int() == 2 || params[0].get_int() == 0))
+    {
+        int day = 1;
+        if(params.size() > 1)
+        {
+            if(params[1].get_int() == 1)
+            {
+                day = 1;
+            }
+            else if(params[1].get_int() == 2)
+            {
+                day = 7;
+            }
+            else if(params[1].get_int() == 3)
+            {
+                day = 30;
+            }
+            else if(params[1].get_int() == 4)
+            {
+                day = 90;
+            }
+            else if(params[1].get_int() == 5)
+            {
+                day = 365;
+            }
+        }
+
+        std::list<CAccountingEntry> acentries;
+        CWallet::TxItems txOrdered = pwalletMain->OrderedTxItems(acentries, strAccount);
+        uint64_t t = GetTime();
+        // iterate backwards until we have nCount items to return:
+        for (CWallet::TxItems::reverse_iterator it = txOrdered.rbegin(); it != txOrdered.rend(); ++it)
+        {
+            CWalletTx *const pwtx = (*it).second.first;
+            if (pwtx != 0)
+                ListTransactions(*pwtx, strAccount, 0, true, trans, filter);
+            CAccountingEntry *const pacentry = (*it).second.second;
+            if (pacentry != 0)
+                AcentryToJSON(*pacentry, strAccount, trans);
+            int confirms = pwtx->GetDepthInMainChain();
+            if(confirms > 0)
+            {
+                if (mapBlockIndex[pwtx->hashBlock]->GetBlockTime() <= (t - (day * 60 * 60 * 24)) && (int)trans.size() >= nCount) break;
+            }
+        }
+
+        vector<UniValue> arrTmp = trans.getValues();
+
+        std::reverse(arrTmp.begin(), arrTmp.end()); // Return oldest to newest
+
+        trans.clear();
+        trans.setArray();
+        trans.push_backV(arrTmp);
+    }
+
+    returnObj.push_back(Pair("listtransactions", trans));
+    return returnObj;
+}
+
+/**
+ * @note Do not add or change anything in the information returned by this
+ * method. `getinfo` exists for backwards-compatibility only. It combines
+ * information from wildly different sources in the program, which is a mess,
+ * and is thus planned to be deprecated eventually.
+ *
+ * Based on the source of the information, new information should be added to:
+ * - `getblockchaininfo`,
+ * - `getnetworkinfo` or
+ * - `getwalletinfo`
+ *
+ * Or alternatively, create a specific query method for the information.
+ **/
+UniValue getinfo(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getinfo\n"
+            "Returns an object containing various state info.\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"version\": xxxxx,           (numeric) the server version\n"
+            "  \"protocolversion\": xxxxx,   (numeric) the protocol version\n"
+            "  \"walletversion\": xxxxx,     (numeric) the wallet version\n"
+            "  \"balance\": xxxxxxx,         (numeric) the total Vidulum balance
