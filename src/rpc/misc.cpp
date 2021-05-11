@@ -554,4 +554,157 @@ UniValue validateaddress(const UniValue& params, bool fHelp)
     if (isValid)
     {
         std::string currentAddress = EncodeDestination(dest);
-        ret.push_back(Pair("address", cu
+        ret.push_back(Pair("address", currentAddress));
+
+        CScript scriptPubKey = GetScriptForDestination(dest);
+        ret.push_back(Pair("scriptPubKey", HexStr(scriptPubKey.begin(), scriptPubKey.end())));
+
+#ifdef ENABLE_WALLET
+        isminetype mine = pwalletMain ? IsMine(*pwalletMain, dest) : ISMINE_NO;
+        ret.push_back(Pair("ismine", (mine & ISMINE_SPENDABLE) ? true : false));
+        ret.push_back(Pair("iswatchonly", (mine & ISMINE_WATCH_ONLY) ? true: false));
+        UniValue detail = boost::apply_visitor(DescribeAddressVisitor(), dest);
+        ret.pushKVs(detail);
+        if (pwalletMain && pwalletMain->mapAddressBook.count(dest))
+            ret.push_back(Pair("account", pwalletMain->mapAddressBook[dest].name));
+#endif
+    }
+    return ret;
+}
+
+
+class DescribePaymentAddressVisitor : public boost::static_visitor<UniValue>
+{
+public:
+    UniValue operator()(const libzcash::InvalidEncoding &zaddr) const { return UniValue(UniValue::VOBJ); }
+
+    UniValue operator()(const libzcash::SproutPaymentAddress &zaddr) const {
+        UniValue obj(UniValue::VOBJ);
+        obj.push_back(Pair("type", "sprout"));
+        obj.push_back(Pair("payingkey", zaddr.a_pk.GetHex()));
+        obj.push_back(Pair("transmissionkey", zaddr.pk_enc.GetHex()));
+#ifdef ENABLE_WALLET
+        if (pwalletMain) {
+            obj.push_back(Pair("ismine", pwalletMain->HaveSproutSpendingKey(zaddr)));
+        }
+#endif
+        return obj;
+    }
+
+    UniValue operator()(const libzcash::SaplingPaymentAddress &zaddr) const {
+        UniValue obj(UniValue::VOBJ);
+        obj.push_back(Pair("type", "sapling"));
+        obj.push_back(Pair("diversifier", HexStr(zaddr.d)));
+        obj.push_back(Pair("diversifiedtransmissionkey", zaddr.pk_d.GetHex()));
+#ifdef ENABLE_WALLET
+        if (pwalletMain) {
+            libzcash::SaplingIncomingViewingKey ivk;
+            libzcash::SaplingFullViewingKey fvk;
+            bool isMine = pwalletMain->GetSaplingIncomingViewingKey(zaddr, ivk) &&
+                pwalletMain->GetSaplingFullViewingKey(ivk, fvk) &&
+                pwalletMain->HaveSaplingSpendingKey(fvk);
+            obj.push_back(Pair("ismine", isMine));
+        }
+#endif
+        return obj;
+    }
+};
+
+UniValue z_validateaddress(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "z_validateaddress \"zaddr\"\n"
+            "\nReturn information about the given z address.\n"
+            "\nArguments:\n"
+            "1. \"zaddr\"     (string, required) The z address to validate\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"isvalid\" : true|false,      (boolean) If the address is valid or not. If not, this is the only property returned.\n"
+            "  \"address\" : \"zaddr\",         (string) The z address validated\n"
+            "  \"type\" : \"xxxx\",             (string) \"sprout\" or \"sapling\"\n"
+            "  \"ismine\" : true|false,       (boolean) If the address is yours or not\n"
+            "  \"payingkey\" : \"hex\",         (string) [sprout] The hex value of the paying key, a_pk\n"
+            "  \"transmissionkey\" : \"hex\",   (string) [sprout] The hex value of the transmission key, pk_enc\n"
+            "  \"diversifier\" : \"hex\",       (string) [sapling] The hex value of the diversifier, d\n"
+            "  \"diversifiedtransmissionkey\" : \"hex\", (string) [sapling] The hex value of pk_d\n"
+
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("z_validateaddress", "\"zcWsmqT4X2V4jgxbgiCzyrAfRT1vi1F4sn7M5Pkh66izzw8Uk7LBGAH3DtcSMJeUb2pi3W4SQF8LMKkU2cUuVP68yAGcomL\"")
+            + HelpExampleRpc("z_validateaddress", "\"zcWsmqT4X2V4jgxbgiCzyrAfRT1vi1F4sn7M5Pkh66izzw8Uk7LBGAH3DtcSMJeUb2pi3W4SQF8LMKkU2cUuVP68yAGcomL\"")
+        );
+
+
+#ifdef ENABLE_WALLET
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+#else
+    LOCK(cs_main);
+#endif
+
+    string strAddress = params[0].get_str();
+    auto address = DecodePaymentAddress(strAddress);
+    bool isValid = IsValidPaymentAddress(address);
+
+    UniValue ret(UniValue::VOBJ);
+    ret.push_back(Pair("isvalid", isValid));
+    if (isValid)
+    {
+        ret.push_back(Pair("address", strAddress));
+        UniValue detail = boost::apply_visitor(DescribePaymentAddressVisitor(), address);
+        ret.pushKVs(detail);
+    }
+    return ret;
+}
+
+
+/**
+ * Used by addmultisigaddress / createmultisig:
+ */
+CScript _createmultisig_redeemScript(const UniValue& params)
+{
+    int nRequired = params[0].get_int();
+    const UniValue& keys = params[1].get_array();
+
+    // Gather public keys
+    if (nRequired < 1)
+        throw runtime_error("a multisignature address must require at least one key to redeem");
+    if ((int)keys.size() < nRequired)
+        throw runtime_error(
+            strprintf("not enough keys supplied "
+                      "(got %u keys, but need at least %d to redeem)", keys.size(), nRequired));
+    if (keys.size() > 16)
+        throw runtime_error("Number of addresses involved in the multisignature address creation > 16\nReduce the number");
+    std::vector<CPubKey> pubkeys;
+    pubkeys.resize(keys.size());
+    for (unsigned int i = 0; i < keys.size(); i++)
+    {
+        const std::string& ks = keys[i].get_str();
+#ifdef ENABLE_WALLET
+        // Case 1: Bitcoin address and we have full public key:
+        CTxDestination dest = DecodeDestination(ks);
+        if (pwalletMain && IsValidDestination(dest)) {
+            const CKeyID *keyID = boost::get<CKeyID>(&dest);
+            if (!keyID) {
+                throw std::runtime_error(strprintf("%s does not refer to a key", ks));
+            }
+            CPubKey vchPubKey;
+            if (!pwalletMain->GetPubKey(*keyID, vchPubKey)) {
+                throw std::runtime_error(strprintf("no full public key for address %s", ks));
+            }
+            if (!vchPubKey.IsFullyValid())
+                throw runtime_error(" Invalid public key: "+ks);
+            pubkeys[i] = vchPubKey;
+        }
+
+        // Case 2: hex public key
+        else
+#endif
+        if (IsHex(ks))
+        {
+            CPubKey vchPubKey(ParseHex(ks));
+            if (!vchPubKey.IsFullyValid())
+                throw runtime_error(" Invalid public key: "+ks);
+            pubkeys[i] = vchPubKey;
+        }
+   
