@@ -1334,4 +1334,91 @@ UniValue getaddresstxids(const UniValue& params, bool fHelp)
             txids.insert(std::make_pair(height, txid));
         } else {
             if (txids.insert(std::make_pair(height, txid)).second) {
-      
+                result.push_back(txid);
+            }
+        }
+    }
+
+    if (addresses.size() > 1) {
+        for (std::set<std::pair<int, std::string> >::const_iterator it=txids.begin(); it!=txids.end(); it++) {
+            result.push_back(it->second);
+        }
+    }
+
+    return result;
+
+}
+
+UniValue getspentinfo(const UniValue& params, bool fHelp)
+{
+
+    if (fHelp || params.size() != 1 || !params[0].isObject())
+        throw runtime_error(
+            "getspentinfo\n"
+            "\nReturns the txid and index where an output is spent.\n"
+            "\nArguments:\n"
+            "{\n"
+            "  \"txid\" (string) The hex string of the txid\n"
+            "  \"index\" (number) The start block height\n"
+            "}\n"
+            "\nResult:\n"
+            "{\n"
+            "  \"txid\"  (string) The transaction id\n"
+            "  \"index\"  (number) The spending input index\n"
+            "  ,...\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getspentinfo", "'{\"txid\": \"0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9\", \"index\": 0}'")
+            + HelpExampleRpc("getspentinfo", "{\"txid\": \"0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9\", \"index\": 0}")
+        );
+
+    UniValue txidValue = find_value(params[0].get_obj(), "txid");
+    UniValue indexValue = find_value(params[0].get_obj(), "index");
+
+    if (!txidValue.isStr() || !indexValue.isNum()) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid txid or index");
+    }
+
+    uint256 txid = ParseHashV(txidValue, "txid");
+    int outputIndex = indexValue.get_int();
+
+    CSpentIndexKey key(txid, outputIndex);
+    CSpentIndexValue value;
+
+    if (!GetSpentIndex(key, value)) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Unable to get spent info");
+    }
+
+    UniValue obj(UniValue::VOBJ);
+    obj.push_back(Pair("txid", value.txid.GetHex()));
+    obj.push_back(Pair("index", (int)value.inputIndex));
+    obj.push_back(Pair("height", value.blockHeight));
+
+    return obj;
+}
+
+static const CRPCCommand commands[] =
+{ //  category              name                      actor (function)         okSafeMode
+  //  --------------------- ------------------------  -----------------------  ----------
+    { "control",            "getalldata",             &getalldata,             true  },
+    { "control",            "getinfo",                &getinfo,                true  }, /* uses wallet if enabled */
+    { "util",               "validateaddress",        &validateaddress,        true  }, /* uses wallet if enabled */
+    { "util",               "z_validateaddress",      &z_validateaddress,      true  }, /* uses wallet if enabled */
+    { "util",               "createmultisig",         &createmultisig,         true  },
+    { "util",               "verifymessage",          &verifymessage,          true  },
+    /* Address index */
+    { "addressindex",       "getaddresstxids",        &getaddresstxids,        false }, /* insight explorer */
+    { "addressindex",       "getaddressbalance",      &getaddressbalance,      false }, /* insight explorer */
+    { "addressindex",       "getaddressdeltas",       &getaddressdeltas,       false }, /* insight explorer */
+    { "addressindex",       "getaddressutxos",        &getaddressutxos,        false }, /* insight explorer */
+    { "addressindex",       "getaddressmempool",      &getaddressmempool,      true  }, /* insight explorer */
+    { "blockchain",         "getspentinfo",           &getspentinfo,           false }, /* insight explorer */
+    /* Not shown in help */
+    { "hidden",             "setmocktime",            &setmocktime,            true  },
+};
+
+void RegisterMiscRPCCommands(CRPCTable &tableRPC)
+{
+    for (unsigned int vcidx = 0; vcidx < ARRAYLEN(commands); vcidx++)
+        tableRPC.appendCommand(commands[vcidx].name, &commands[vcidx]);
+}
