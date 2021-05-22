@@ -165,4 +165,149 @@ vector<unsigned char> ParseHexO(const UniValue& o, string strKey)
  * Note: This interface may still be subject to change.
  */
 
-std::string CRP
+std::string CRPCTable::help(const std::string& strCommand) const
+{
+    string strRet;
+    string category;
+    set<rpcfn_type> setDone;
+    vector<pair<string, const CRPCCommand*> > vCommands;
+
+    for (map<string, const CRPCCommand*>::const_iterator mi = mapCommands.begin(); mi != mapCommands.end(); ++mi)
+        vCommands.push_back(make_pair(mi->second->category + mi->first, mi->second));
+    sort(vCommands.begin(), vCommands.end());
+
+    BOOST_FOREACH(const PAIRTYPE(string, const CRPCCommand*)& command, vCommands)
+    {
+        const CRPCCommand *pcmd = command.second;
+        string strMethod = pcmd->name;
+        // We already filter duplicates, but these deprecated screw up the sort order
+        if (strMethod.find("label") != string::npos)
+            continue;
+        if ((strCommand != "" || pcmd->category == "hidden") && strMethod != strCommand)
+            continue;
+        try
+        {
+            UniValue params;
+            rpcfn_type pfn = pcmd->actor;
+            if (setDone.insert(pfn).second)
+                (*pfn)(params, true);
+        }
+        catch (const std::exception& e)
+        {
+            // Help text is returned in an exception
+            string strHelp = string(e.what());
+            if (strCommand == "")
+            {
+                if (strHelp.find('\n') != string::npos)
+                    strHelp = strHelp.substr(0, strHelp.find('\n'));
+
+                if (category != pcmd->category)
+                {
+                    if (!category.empty())
+                        strRet += "\n";
+                    category = pcmd->category;
+                    string firstLetter = category.substr(0,1);
+                    boost::to_upper(firstLetter);
+                    strRet += "== " + firstLetter + category.substr(1) + " ==\n";
+                }
+            }
+            strRet += strHelp + "\n";
+        }
+    }
+    if (strRet == "")
+        strRet = strprintf("help: unknown command: %s\n", strCommand);
+    strRet = strRet.substr(0,strRet.size()-1);
+    return strRet;
+}
+
+UniValue help(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() > 1)
+        throw runtime_error(
+            "help ( \"command\" )\n"
+            "\nList all commands, or get help for a specified command.\n"
+            "\nArguments:\n"
+            "1. \"command\"     (string, optional) The command to get help on\n"
+            "\nResult:\n"
+            "\"text\"     (string) The help text\n"
+        );
+
+    string strCommand;
+    if (params.size() > 0)
+        strCommand = params[0].get_str();
+
+    return tableRPC.help(strCommand);
+}
+
+
+UniValue stop(const UniValue& params, bool fHelp)
+{
+    // Accept the deprecated and ignored 'detach' boolean argument
+    if (fHelp || params.size() > 1)
+        throw runtime_error(
+            "stop\n"
+            "\nStop Vidulum server.");
+    // Event loop will exit after current HTTP requests have been handled, so
+    // this reply will get back to the client.
+    StartShutdown();
+    return "Vidulum server stopping";
+}
+
+/**
+ * Call Table
+ */
+static const CRPCCommand vRPCCommands[] =
+{ //  category              name                      actor (function)         okSafeMode
+  //  --------------------- ------------------------  -----------------------  ----------
+    /* Overall control/query calls */
+    { "control",            "help",                   &help,                   true  },
+    { "control",            "stop",                   &stop,                   true  },
+
+	
+    /* MN features */
+    {"vidulum",             "masternode",               &masternode, true},
+    {"vidulum",             "listmasternodes",          &listmasternodes, true},
+    {"vidulum",             "getmasternodecount",       &getmasternodecount, true},
+    {"vidulum",             "masternodeconnect",        &masternodeconnect, true},
+    {"vidulum",             "masternodecurrent",        &masternodecurrent, true},
+    {"vidulum",             "masternodedebug",          &masternodedebug, true},
+    {"vidulum",             "startmasternode",          &startmasternode, true},
+    {"vidulum",             "createmasternodekey",      &createmasternodekey, true},
+    {"vidulum",             "getmasternodeoutputs",     &getmasternodeoutputs, true},
+    {"vidulum",             "listmasternodeconf",       &listmasternodeconf, true},
+    {"vidulum",             "getmasternodestatus",      &getmasternodestatus, true},
+    {"vidulum",             "getmasternodewinners",     &getmasternodewinners, true},
+    {"vidulum",             "getmasternodescores",      &getmasternodescores, true},
+    // {"vidulum",             "mnbudget",                 &mnbudget, true},
+    {"vidulum",             "preparebudget",            &preparebudget, true},
+    {"vidulum",             "submitbudget",             &submitbudget, true},
+    {"vidulum",             "mnbudgetvote",             &mnbudgetvote, true},
+    {"vidulum",             "getbudgetvotes",           &getbudgetvotes, true},
+    {"vidulum",             "getnextsuperblock",        &getnextsuperblock, true},
+    {"vidulum",             "getbudgetprojection",      &getbudgetprojection, true},
+    {"vidulum",             "getbudgetinfo",            &getbudgetinfo, true},
+    {"vidulum",             "mnbudgetrawvote",          &mnbudgetrawvote, true},
+    {"vidulum",             "mnfinalbudget",            &mnfinalbudget, true},
+    {"vidulum",             "checkbudgets",             &checkbudgets, true},
+    {"vidulum",             "mnsync",                   &mnsync, true},
+    {"vidulum",             "spork",                    &spork, true},
+    {"vidulum",             "getpoolinfo",              &getpoolinfo, true},
+    {"vidulum",             "startalias",               &startalias, true},
+
+};
+
+CRPCTable::CRPCTable()
+{
+    unsigned int vcidx;
+    for (vcidx = 0; vcidx < (sizeof(vRPCCommands) / sizeof(vRPCCommands[0])); vcidx++)
+    {
+        const CRPCCommand *pcmd;
+
+        pcmd = &vRPCCommands[vcidx];
+        mapCommands[pcmd->name] = pcmd;
+    }
+}
+
+const CRPCCommand *CRPCTable::operator[](const std::string &name) const
+{
+    
