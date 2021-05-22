@@ -310,4 +310,218 @@ CRPCTable::CRPCTable()
 
 const CRPCCommand *CRPCTable::operator[](const std::string &name) const
 {
-    
+    map<string, const CRPCCommand*>::const_iterator it = mapCommands.find(name);
+    if (it == mapCommands.end())
+        return NULL;
+    return (*it).second;
+}
+
+bool CRPCTable::appendCommand(const std::string& name, const CRPCCommand* pcmd)
+{
+    if (IsRPCRunning())
+        return false;
+
+    // don't allow overwriting for now
+    map<string, const CRPCCommand*>::const_iterator it = mapCommands.find(name);
+    if (it != mapCommands.end())
+        return false;
+
+    mapCommands[name] = pcmd;
+    return true;
+}
+
+bool StartRPC()
+{
+    LogPrint("rpc", "Starting RPC\n");
+    fRPCRunning = true;
+    g_rpcSignals.Started();
+
+    // Launch one async rpc worker.  The ability to launch multiple workers is not recommended at present and thus the option is disabled.
+    getAsyncRPCQueue()->addWorker();
+/*
+    int n = GetArg("-rpcasyncthreads", 1);
+    if (n<1) {
+        LogPrintf("ERROR: Invalid value %d for -rpcasyncthreads.  Must be at least 1.\n", n);
+        strerr = strprintf(_("An error occurred while setting up the Async RPC threads, invalid parameter value of %d (must be at least 1)."), n);
+        uiInterface.ThreadSafeMessageBox(strerr, "", CClientUIInterface::MSG_ERROR);
+        StartShutdown();
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        getAsyncRPCQueue()->addWorker();
+*/
+    return true;
+}
+
+void InterruptRPC()
+{
+    LogPrint("rpc", "Interrupting RPC\n");
+    // Interrupt e.g. running longpolls
+    fRPCRunning = false;
+}
+
+void StopRPC()
+{
+    LogPrint("rpc", "Stopping RPC\n");
+    deadlineTimers.clear();
+    g_rpcSignals.Stopped();
+
+    // Tells async queue to cancel all operations and shutdown.
+    LogPrintf("%s: waiting for async rpc workers to stop\n", __func__);
+    getAsyncRPCQueue()->closeAndWait();
+}
+
+bool IsRPCRunning()
+{
+    return fRPCRunning;
+}
+
+void SetRPCWarmupStatus(const std::string& newStatus)
+{
+    LOCK(cs_rpcWarmup);
+    rpcWarmupStatus = newStatus;
+}
+
+void SetRPCWarmupFinished()
+{
+    LOCK(cs_rpcWarmup);
+    assert(fRPCInWarmup);
+    fRPCInWarmup = false;
+}
+
+bool RPCIsInWarmup(std::string *outStatus)
+{
+    LOCK(cs_rpcWarmup);
+    if (outStatus)
+        *outStatus = rpcWarmupStatus;
+    return fRPCInWarmup;
+}
+
+void JSONRequest::parse(const UniValue& valRequest)
+{
+    // Parse request
+    if (!valRequest.isObject())
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Invalid Request object");
+    const UniValue& request = valRequest.get_obj();
+
+    // Parse id now so errors from here on will have the id
+    id = find_value(request, "id");
+
+    // Parse method
+    UniValue valMethod = find_value(request, "method");
+    if (valMethod.isNull())
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Missing method");
+    if (!valMethod.isStr())
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Method must be a string");
+    strMethod = valMethod.get_str();
+    if (strMethod != "getblocktemplate")
+        LogPrint("rpc", "ThreadRPCServer method=%s\n", SanitizeString(strMethod));
+
+    // Parse params
+    UniValue valParams = find_value(request, "params");
+    if (valParams.isArray())
+        params = valParams.get_array();
+    else if (valParams.isNull())
+        params = UniValue(UniValue::VARR);
+    else
+        throw JSONRPCError(RPC_INVALID_REQUEST, "Params must be an array");
+}
+
+static UniValue JSONRPCExecOne(const UniValue& req)
+{
+    UniValue rpc_result(UniValue::VOBJ);
+
+    JSONRequest jreq;
+    try {
+        jreq.parse(req);
+
+        UniValue result = tableRPC.execute(jreq.strMethod, jreq.params);
+        rpc_result = JSONRPCReplyObj(result, NullUniValue, jreq.id);
+    }
+    catch (const UniValue& objError)
+    {
+        rpc_result = JSONRPCReplyObj(NullUniValue, objError, jreq.id);
+    }
+    catch (const std::exception& e)
+    {
+        rpc_result = JSONRPCReplyObj(NullUniValue,
+                                     JSONRPCError(RPC_PARSE_ERROR, e.what()), jreq.id);
+    }
+
+    return rpc_result;
+}
+
+std::string JSONRPCExecBatch(const UniValue& vReq)
+{
+    UniValue ret(UniValue::VARR);
+    for (size_t reqIdx = 0; reqIdx < vReq.size(); reqIdx++)
+        ret.push_back(JSONRPCExecOne(vReq[reqIdx]));
+
+    return ret.write() + "\n";
+}
+
+UniValue CRPCTable::execute(const std::string &strMethod, const UniValue &params) const
+{
+    // Return immediately if in warmup
+    {
+        LOCK(cs_rpcWarmup);
+        if (fRPCInWarmup)
+            throw JSONRPCError(RPC_IN_WARMUP, rpcWarmupStatus);
+    }
+
+    // Find method
+    const CRPCCommand *pcmd = tableRPC[strMethod];
+    if (!pcmd)
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
+
+    g_rpcSignals.PreCommand(*pcmd);
+
+    try
+    {
+        // Execute
+        return pcmd->actor(params, false);
+    }
+    catch (const std::exception& e)
+    {
+        throw JSONRPCError(RPC_MISC_ERROR, e.what());
+    }
+
+    g_rpcSignals.PostCommand(*pcmd);
+}
+
+std::string HelpExampleCli(const std::string& methodname, const std::string& args)
+{
+    return "> vidulum-cli " + methodname + " " + args + "\n";
+}
+
+std::string HelpExampleRpc(const std::string& methodname, const std::string& args)
+{
+    return "> curl --user myusername --data-binary '{\"jsonrpc\": \"1.0\", \"id\":\"curltest\", "
+        "\"method\": \"" + methodname + "\", \"params\": [" + args + "] }' -H 'content-type: text/plain;' http://127.0.0.1:17676/\n";
+}
+string experimentalDisabledHelpMsg(const string& rpc, const string& enableArg)
+{
+    return "\nWARNING: " + rpc + " is disabled.\n"
+        "To enable it, restart zcashd with the -experimentalfeatures and\n"
+        "-" + enableArg + " commandline options, or add these two lines\n"
+        "to the zcash.conf file:\n\n"
+        "experimentalfeatures=1\n"
+        + enableArg + "=1\n";
+}
+
+void RPCRegisterTimerInterface(RPCTimerInterface *iface)
+{
+    timerInterfaces.push_back(iface);
+}
+
+void RPCUnregisterTimerInterface(RPCTimerInterface *iface)
+{
+    std::vector<RPCTimerInterface*>::iterator i = std::find(timerInterfaces.begin(), timerInterfaces.end(), iface);
+    assert(i != timerInterfaces.end());
+    timerInterfaces.erase(i);
+}
+
+void RPCRunLater(const std::string& name, boost::function<void(void)> func, int64_t nSeconds)
+{
+    if (timerInterfaces.empty())
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "No timer handler r
