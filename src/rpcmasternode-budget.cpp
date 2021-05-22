@@ -111,4 +111,143 @@ UniValue mnbudget(const UniValue& params, bool fHelp)
 
     if (strCommand == "projection") {
         UniValue newParams(UniValue::VARR);
-        for (unsigned int i = 1; i < params.size(); i
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return getbudgetprojection(newParams, fHelp);
+    }
+
+    if (strCommand == "show" || strCommand == "getinfo") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return getbudgetinfo(newParams, fHelp);
+    }
+
+    if (strCommand == "getvotes") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return getbudgetvotes(newParams, fHelp);
+    }
+
+    if (strCommand == "check") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return checkbudgets(newParams, fHelp);
+    }
+
+    return NullUniValue;
+}
+
+UniValue preparebudget(const UniValue& params, bool fHelp)
+{
+    int nBlockMin = 0;
+    CBlockIndex* pindexPrev = chainActive.Tip();
+
+    if (fHelp || params.size() != 6)
+        throw runtime_error(
+            "preparebudget \"proposal-name\" \"url\" payment-count block-start \"vidulum-address\" monthy-payment\n"
+            "\nPrepare proposal for network by signing and creating tx\n"
+
+            "\nArguments:\n"
+            "1. \"proposal-name\":  (string, required) Desired proposal name (20 character limit)\n"
+            "2. \"url\":            (string, required) URL of proposal details (64 character limit)\n"
+            "3. payment-count:    (numeric, required) Total number of monthly payments\n"
+            "4. block-start:      (numeric, required) Starting super block height\n"
+            "5. \"vidulum-address\":   (string, required) Vidulum address to send payments to\n"
+            "6. monthly-payment:  (numeric, required) Monthly payment amount\n"
+
+            "\nResult:\n"
+            "\"xxxx\"       (string) proposal fee hash (if successful) or error message (if failed)\n"
+            "\nExamples:\n" +
+            HelpExampleCli("preparebudget", "\"test-proposal\" \"https://forum.vidulum.org/t/test-proposal\" 2 820800 \"D9oc6C3dttUbv8zd7zGNq1qKBGf4ZQ1XEE\" 500") +
+            HelpExampleRpc("preparebudget", "\"test-proposal\" \"https://forum.vidulum.org/t/test-proposal\" 2 820800 \"D9oc6C3dttUbv8zd7zGNq1qKBGf4ZQ1XEE\" 500"));
+
+    if (pwalletMain->IsLocked())
+        throw JSONRPCError(RPC_WALLET_UNLOCK_NEEDED, "Error: Please enter the wallet passphrase with walletpassphrase first.");
+
+    std::string strProposalName = SanitizeString(params[0].get_str());
+    if (strProposalName.size() > 20)
+        throw runtime_error("Invalid proposal name, limit of 20 characters.");
+
+    std::string strURL = SanitizeString(params[1].get_str());
+    if (strURL.size() > 64)
+        throw runtime_error("Invalid url, limit of 64 characters.");
+
+    int nPaymentCount = params[2].get_int();
+    if (nPaymentCount < 1)
+        throw runtime_error("Invalid payment count, must be more than zero.");
+
+    // Start must be in the next budget cycle
+    if (pindexPrev != NULL) nBlockMin = pindexPrev->nHeight - pindexPrev->nHeight % GetBudgetPaymentCycleBlocks() + GetBudgetPaymentCycleBlocks();
+
+    int nBlockStart = params[3].get_int();
+    if (nBlockStart % GetBudgetPaymentCycleBlocks() != 0) {
+        int nNext = pindexPrev->nHeight - pindexPrev->nHeight % GetBudgetPaymentCycleBlocks() + GetBudgetPaymentCycleBlocks();
+        throw runtime_error(strprintf("Invalid block start - must be a budget cycle block. Next valid block: %d", nNext));
+    }
+
+    int nBlockEnd = nBlockStart + GetBudgetPaymentCycleBlocks() * nPaymentCount; // End must be AFTER current cycle
+
+    if (nBlockStart < nBlockMin)
+        throw runtime_error("Invalid block start, must be more than current height.");
+
+    if (nBlockEnd < pindexPrev->nHeight)
+        throw runtime_error("Invalid ending block, starting block + (payment_cycle*payments) must be more than current height.");
+
+    std::string strAddress = params[4].get_str();
+    CTxDestination dest = DecodeDestination(strAddress);
+    if (!IsValidDestination(dest))
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Vidulum address");
+
+    // Parse Vidulum address
+    CScript scriptPubKey = GetScriptForDestination(dest);
+    CAmount nAmount = AmountFromValue(params[5]);
+
+    //*************************************************************************
+
+    // create transaction 15 minutes into the future, to allow for confirmation time
+    CBudgetProposalBroadcast budgetProposalBroadcast(strProposalName, strURL, nPaymentCount, scriptPubKey, nAmount, nBlockStart, uint256());
+
+    std::string strError = "";
+    if (!budgetProposalBroadcast.IsValid(strError, false))
+        throw runtime_error("Proposal is not valid - " + budgetProposalBroadcast.GetHash().ToString() + " - " + strError);
+
+    bool useIX = false; //true;
+    // if (params.size() > 7) {
+    //     if(params[7].get_str() != "false" && params[7].get_str() != "true")
+    //         return "Invalid use_ix, must be true or false";
+    //     useIX = params[7].get_str() == "true" ? true : false;
+    // }
+
+    CWalletTx wtx;
+    if (!pwalletMain->GetBudgetSystemCollateralTX(wtx, budgetProposalBroadcast.GetHash(), useIX)) {
+        throw runtime_error("Error making collateral transaction for proposal. Please check your wallet balance.");
+    }
+
+    // make our change address
+    CReserveKey reservekey(pwalletMain);
+    //send the tx to the network
+    pwalletMain->CommitTransaction(wtx, reservekey, useIX ? "ix" : "tx");
+
+    return wtx.GetHash().ToString();
+}
+
+UniValue submitbudget(const UniValue& params, bool fHelp)
+{
+    int nBlockMin = 0;
+    CBlockIndex* pindexPrev = chainActive.Tip();
+
+    if (fHelp || params.size() != 7)
+        throw runtime_error(
+            "submitbudget \"proposal-name\" \"url\" payment-count block-start \"vidulum-address\" monthy-payment \"fee-tx\"\n"
+            "\nSubmit proposal to the network\n"
+
+            "\nArguments:\n"
+            "1. \"proposal-name\":  (string, required) Desired proposal name (20 character limit)\n"
+  
