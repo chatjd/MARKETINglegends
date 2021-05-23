@@ -250,4 +250,122 @@ UniValue submitbudget(const UniValue& params, bool fHelp)
 
             "\nArguments:\n"
             "1. \"proposal-name\":  (string, required) Desired proposal name (20 character limit)\n"
-  
+            "2. \"url\":            (string, required) URL of proposal details (64 character limit)\n"
+            "3. payment-count:    (numeric, required) Total number of monthly payments\n"
+            "4. block-start:      (numeric, required) Starting super block height\n"
+            "5. \"vidulum-address\":   (string, required) Vidulum address to send payments to\n"
+            "6. monthly-payment:  (numeric, required) Monthly payment amount\n"
+            "7. \"fee-tx\":         (string, required) Transaction hash from preparebudget command\n"
+
+            "\nResult:\n"
+            "\"xxxx\"       (string) proposal hash (if successful) or error message (if failed)\n"
+            "\nExamples:\n" +
+            HelpExampleCli("submitbudget", "\"test-proposal\" \"https://forum.vidulum.org/t/test-proposal\" 2 820800 \"D9oc6C3dttUbv8zd7zGNq1qKBGf4ZQ1XEE\" 500") +
+            HelpExampleRpc("submitbudget", "\"test-proposal\" \"https://forum.vidulum.org/t/test-proposal\" 2 820800 \"D9oc6C3dttUbv8zd7zGNq1qKBGf4ZQ1XEE\" 500"));
+
+    // Check these inputs the same way we check the vote commands:
+    // **********************************************************
+
+    std::string strProposalName = SanitizeString(params[0].get_str());
+    if (strProposalName.size() > 20)
+        throw runtime_error("Invalid proposal name, limit of 20 characters.");
+
+    std::string strURL = SanitizeString(params[1].get_str());
+    if (strURL.size() > 64)
+        throw runtime_error("Invalid url, limit of 64 characters.");
+
+    int nPaymentCount = params[2].get_int();
+    if (nPaymentCount < 1)
+        throw runtime_error("Invalid payment count, must be more than zero.");
+
+    // Start must be in the next budget cycle
+    if (pindexPrev != NULL) nBlockMin = pindexPrev->nHeight - pindexPrev->nHeight % GetBudgetPaymentCycleBlocks() + GetBudgetPaymentCycleBlocks();
+
+    int nBlockStart = params[3].get_int();
+    if (nBlockStart % GetBudgetPaymentCycleBlocks() != 0) {
+        int nNext = pindexPrev->nHeight - pindexPrev->nHeight % GetBudgetPaymentCycleBlocks() + GetBudgetPaymentCycleBlocks();
+        throw runtime_error(strprintf("Invalid block start - must be a budget cycle block. Next valid block: %d", nNext));
+    }
+
+    int nBlockEnd = nBlockStart + (GetBudgetPaymentCycleBlocks() * nPaymentCount); // End must be AFTER current cycle
+
+    if (nBlockStart < nBlockMin)
+        throw runtime_error("Invalid block start, must be more than current height.");
+
+    if (nBlockEnd < pindexPrev->nHeight)
+        throw runtime_error("Invalid ending block, starting block + (payment_cycle*payments) must be more than current height.");
+
+    std::string strAddress = params[4].get_str();
+    CTxDestination dest = DecodeDestination(strAddress);
+    if (!IsValidDestination(dest))
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Vidulum address");
+
+    // Parse Vidulum address
+    CScript scriptPubKey = GetScriptForDestination(dest);
+    CAmount nAmount = AmountFromValue(params[5]);
+    uint256 hash = ParseHashV(params[6], "parameter 1");
+
+    //create the proposal incase we're the first to make it
+    CBudgetProposalBroadcast budgetProposalBroadcast(strProposalName, strURL, nPaymentCount, scriptPubKey, nAmount, nBlockStart, hash);
+
+    std::string strError = "";
+    int nConf = 0;
+    if (!IsBudgetCollateralValid(hash, budgetProposalBroadcast.GetHash(), strError, budgetProposalBroadcast.nTime, nConf)) {
+        throw runtime_error("Proposal FeeTX is not valid - " + hash.ToString() + " - " + strError);
+    }
+
+    if (!masternodeSync.IsBlockchainSynced()) {
+        throw runtime_error("Must wait for client to sync with masternode network. Try again in a minute or so.");
+    }
+
+    // if(!budgetProposalBroadcast.IsValid(strError)){
+    //     return "Proposal is not valid - " + budgetProposalBroadcast.GetHash().ToString() + " - " + strError;
+    // }
+
+    budget.mapSeenMasternodeBudgetProposals.insert(make_pair(budgetProposalBroadcast.GetHash(), budgetProposalBroadcast));
+    budgetProposalBroadcast.Relay();
+    if(budget.AddProposal(budgetProposalBroadcast)) {
+        return budgetProposalBroadcast.GetHash().ToString();
+    }
+    throw runtime_error("Invalid proposal, see debug.log for details.");
+}
+
+UniValue mnbudgetvote(const UniValue& params, bool fHelp)
+{
+    std::string strCommand;
+    if (params.size() >= 1) {
+        strCommand = params[0].get_str();
+
+        // Backwards compatibility with legacy `mnbudget` command
+        if (strCommand == "vote") strCommand = "local";
+        if (strCommand == "vote-many") strCommand = "many";
+        if (strCommand == "vote-alias") strCommand = "alias";
+    }
+
+    if (fHelp || (params.size() == 3 && (strCommand != "local" && strCommand != "many")) || (params.size() == 4 && strCommand != "alias") ||
+        params.size() > 4 || params.size() < 3)
+        throw runtime_error(
+            "mnbudgetvote \"local|many|alias\" \"votehash\" \"yes|no\" ( \"alias\" )\n"
+            "\nVote on a budget proposal\n"
+
+            "\nArguments:\n"
+            "1. \"mode\"      (string, required) The voting mode. 'local' for voting directly from a masternode, 'many' for voting with a MN controller and casting the same vote for each MN, 'alias' for voting with a MN controller and casting a vote for a single MN\n"
+            "2. \"votehash\"  (string, required) The vote hash for the proposal\n"
+            "3. \"votecast\"  (string, required) Your vote. 'yes' to vote for the proposal, 'no' to vote against\n"
+            "4. \"alias\"     (string, required for 'alias' mode) The MN alias to cast a vote for.\n"
+
+            "\nResult:\n"
+            "{\n"
+            "  \"overall\": \"xxxx\",      (string) The overall status message for the vote cast\n"
+            "  \"detail\": [\n"
+            "    {\n"
+            "      \"node\": \"xxxx\",      (string) 'local' or the MN alias\n"
+            "      \"result\": \"xxxx\",    (string) Either 'Success' or 'Failed'\n"
+            "      \"error\": \"xxxx\",     (string) Error message, if vote failed\n"
+            "    }\n"
+            "    ,...\n"
+            "  ]\n"
+            "}\n"
+
+            "\nExamples:\n" +
+            HelpExampleCli("mnbudgetvote", "\"local\" \"ed
