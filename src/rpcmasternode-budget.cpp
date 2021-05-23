@@ -368,4 +368,151 @@ UniValue mnbudgetvote(const UniValue& params, bool fHelp)
             "}\n"
 
             "\nExamples:\n" +
-            HelpExampleCli("mnbudgetvote", "\"local\" \"ed
+            HelpExampleCli("mnbudgetvote", "\"local\" \"ed2f83cedee59a91406f5f47ec4d60bf5a7f9ee6293913c82976bd2d3a658041\" \"yes\"") +
+            HelpExampleRpc("mnbudgetvote", "\"local\" \"ed2f83cedee59a91406f5f47ec4d60bf5a7f9ee6293913c82976bd2d3a658041\" \"yes\""));
+
+    uint256 hash = ParseHashV(params[1], "parameter 1");
+    std::string strVote = params[2].get_str();
+
+    if (strVote != "yes" && strVote != "no") return "You can only vote 'yes' or 'no'";
+    int nVote = VOTE_ABSTAIN;
+    if (strVote == "yes") nVote = VOTE_YES;
+    if (strVote == "no") nVote = VOTE_NO;
+
+    int success = 0;
+    int failed = 0;
+
+    UniValue resultsObj(UniValue::VARR);
+
+    if (strCommand == "local") {
+        CPubKey pubKeyMasternode;
+        CKey keyMasternode;
+        std::string errorMessage;
+
+        UniValue statusObj(UniValue::VOBJ);
+
+        while (true) {
+            if (!obfuScationSigner.SetKey(strMasterNodePrivKey, errorMessage, keyMasternode, pubKeyMasternode)) {
+                failed++;
+                statusObj.push_back(Pair("node", "local"));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Masternode signing error, could not set key correctly: " + errorMessage));
+                resultsObj.push_back(statusObj);
+                break;
+            }
+
+            CMasternode* pmn = mnodeman.Find(activeMasternode.vin);
+            if (pmn == NULL) {
+                failed++;
+                statusObj.push_back(Pair("node", "local"));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Failure to find masternode in list : " + activeMasternode.vin.ToString()));
+                resultsObj.push_back(statusObj);
+                break;
+            }
+
+            CBudgetVote vote(activeMasternode.vin, hash, nVote);
+            if (!vote.Sign(keyMasternode, pubKeyMasternode)) {
+                failed++;
+                statusObj.push_back(Pair("node", "local"));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Failure to sign."));
+                resultsObj.push_back(statusObj);
+                break;
+            }
+
+            std::string strError = "";
+            if (budget.UpdateProposal(vote, NULL, strError)) {
+                success++;
+                budget.mapSeenMasternodeBudgetVotes.insert(make_pair(vote.GetHash(), vote));
+                vote.Relay();
+                statusObj.push_back(Pair("node", "local"));
+                statusObj.push_back(Pair("result", "success"));
+                statusObj.push_back(Pair("error", ""));
+            } else {
+                failed++;
+                statusObj.push_back(Pair("node", "local"));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Error voting : " + strError));
+            }
+            resultsObj.push_back(statusObj);
+            break;
+        }
+
+        UniValue returnObj(UniValue::VOBJ);
+        returnObj.push_back(Pair("overall", strprintf("Voted successfully %d time(s) and failed %d time(s).", success, failed)));
+        returnObj.push_back(Pair("detail", resultsObj));
+
+        return returnObj;
+    }
+
+    if (strCommand == "many") {
+        BOOST_FOREACH (CMasternodeConfig::CMasternodeEntry mne, masternodeConfig.getEntries()) {
+            std::string errorMessage;
+            std::vector<unsigned char> vchMasterNodeSignature;
+            std::string strMasterNodeSignMessage;
+
+            CPubKey pubKeyCollateralAddress;
+            CKey keyCollateralAddress;
+            CPubKey pubKeyMasternode;
+            CKey keyMasternode;
+
+            UniValue statusObj(UniValue::VOBJ);
+
+            if (!obfuScationSigner.SetKey(mne.getPrivKey(), errorMessage, keyMasternode, pubKeyMasternode)) {
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Masternode signing error, could not set key correctly: " + errorMessage));
+                resultsObj.push_back(statusObj);
+                continue;
+            }
+
+            CMasternode* pmn = mnodeman.Find(pubKeyMasternode);
+            if (pmn == NULL) {
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Can't find masternode by pubkey"));
+                resultsObj.push_back(statusObj);
+                continue;
+            }
+
+            CBudgetVote vote(pmn->vin, hash, nVote);
+            if (!vote.Sign(keyMasternode, pubKeyMasternode)) {
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Failure to sign."));
+                resultsObj.push_back(statusObj);
+                continue;
+            }
+
+            std::string strError = "";
+            if (budget.UpdateProposal(vote, NULL, strError)) {
+                budget.mapSeenMasternodeBudgetVotes.insert(make_pair(vote.GetHash(), vote));
+                vote.Relay();
+                success++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "success"));
+                statusObj.push_back(Pair("error", ""));
+            } else {
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", strError.c_str()));
+            }
+
+            resultsObj.push_back(statusObj);
+        }
+
+        UniValue returnObj(UniValue::VOBJ);
+        returnObj.push_back(Pair("overall", strprintf("Voted successfully %d time(s) and failed %d time(s).", success, failed)));
+        returnObj.push_back(Pair("detail", resultsObj));
+
+        return returnObj;
+    }
+
+    if (strCommand == "alias") {
+        std::string strAlias = params[3].get_str();
+      
