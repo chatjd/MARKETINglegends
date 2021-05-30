@@ -515,4 +515,159 @@ UniValue mnbudgetvote(const UniValue& params, bool fHelp)
 
     if (strCommand == "alias") {
         std::string strAlias = params[3].get_str();
-      
+        std::vector<CMasternodeConfig::CMasternodeEntry> mnEntries;
+        mnEntries = masternodeConfig.getEntries();
+
+        BOOST_FOREACH(CMasternodeConfig::CMasternodeEntry mne, masternodeConfig.getEntries()) {
+
+            if( strAlias != mne.getAlias()) continue;
+
+            std::string errorMessage;
+            std::vector<unsigned char> vchMasterNodeSignature;
+            std::string strMasterNodeSignMessage;
+
+            CPubKey pubKeyCollateralAddress;
+            CKey keyCollateralAddress;
+            CPubKey pubKeyMasternode;
+            CKey keyMasternode;
+
+            UniValue statusObj(UniValue::VOBJ);
+
+            if(!obfuScationSigner.SetKey(mne.getPrivKey(), errorMessage, keyMasternode, pubKeyMasternode)){
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Masternode signing error, could not set key correctly: " + errorMessage));
+                resultsObj.push_back(statusObj);
+                continue;
+            }
+
+            CMasternode* pmn = mnodeman.Find(pubKeyMasternode);
+            if(pmn == NULL)
+            {
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Can't find masternode by pubkey"));
+                resultsObj.push_back(statusObj);
+                continue;
+            }
+
+            CBudgetVote vote(pmn->vin, hash, nVote);
+            if(!vote.Sign(keyMasternode, pubKeyMasternode)){
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", "Failure to sign."));
+                resultsObj.push_back(statusObj);
+                continue;
+            }
+
+            std::string strError = "";
+            if(budget.UpdateProposal(vote, NULL, strError)) {
+                budget.mapSeenMasternodeBudgetVotes.insert(make_pair(vote.GetHash(), vote));
+                vote.Relay();
+                success++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "success"));
+                statusObj.push_back(Pair("error", ""));
+            } else {
+                failed++;
+                statusObj.push_back(Pair("node", mne.getAlias()));
+                statusObj.push_back(Pair("result", "failed"));
+                statusObj.push_back(Pair("error", strError.c_str()));
+            }
+
+            resultsObj.push_back(statusObj);
+        }
+
+        UniValue returnObj(UniValue::VOBJ);
+        returnObj.push_back(Pair("overall", strprintf("Voted successfully %d time(s) and failed %d time(s).", success, failed)));
+        returnObj.push_back(Pair("detail", resultsObj));
+
+        return returnObj;
+    }
+
+    return NullUniValue;
+}
+
+UniValue getbudgetvotes(const UniValue& params, bool fHelp)
+{
+    if (params.size() != 1)
+        throw runtime_error(
+            "getbudgetvotes \"proposal-name\"\n"
+            "\nPrint vote information for a budget proposal\n"
+
+            "\nArguments:\n"
+            "1. \"proposal-name\":      (string, required) Name of the proposal\n"
+
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"mnId\": \"xxxx\",        (string) Hash of the masternode's collateral transaction\n"
+            "    \"nHash\": \"xxxx\",       (string) Hash of the vote\n"
+            "    \"Vote\": \"YES|NO\",      (string) Vote cast ('YES' or 'NO')\n"
+            "    \"nTime\": xxxx,         (numeric) Time in seconds since epoch the vote was cast\n"
+            "    \"fValid\": true|false,  (boolean) 'true' if the vote is valid, 'false' otherwise\n"
+            "  }\n"
+            "  ,...\n"
+            "]\n"
+            "\nExamples:\n" +
+            HelpExampleCli("getbudgetvotes", "\"test-proposal\"") + HelpExampleRpc("getbudgetvotes", "\"test-proposal\""));
+
+    std::string strProposalName = SanitizeString(params[0].get_str());
+
+    UniValue ret(UniValue::VARR);
+
+    CBudgetProposal* pbudgetProposal = budget.FindProposal(strProposalName);
+
+    if (pbudgetProposal == NULL) throw runtime_error("Unknown proposal name");
+
+    std::map<uint256, CBudgetVote>::iterator it = pbudgetProposal->mapVotes.begin();
+    while (it != pbudgetProposal->mapVotes.end()) {
+        UniValue bObj(UniValue::VOBJ);
+        bObj.push_back(Pair("mnId", (*it).second.vin.prevout.hash.ToString()));
+        bObj.push_back(Pair("nHash", (*it).first.ToString().c_str()));
+        bObj.push_back(Pair("Vote", (*it).second.GetVoteString()));
+        bObj.push_back(Pair("nTime", (int64_t)(*it).second.nTime));
+        bObj.push_back(Pair("fValid", (*it).second.fValid));
+
+        ret.push_back(bObj);
+
+        it++;
+    }
+
+    return ret;
+}
+
+UniValue getnextsuperblock(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getnextsuperblock\n"
+            "\nPrint the next super block height\n"
+
+            "\nResult:\n"
+            "n      (numeric) Block height of the next super block\n"
+            "\nExamples:\n" +
+            HelpExampleCli("getnextsuperblock", "") + HelpExampleRpc("getnextsuperblock", ""));
+
+    CBlockIndex* pindexPrev = chainActive.Tip();
+    if (!pindexPrev) return "unknown";
+
+    int nNext = pindexPrev->nHeight - pindexPrev->nHeight % GetBudgetPaymentCycleBlocks() + GetBudgetPaymentCycleBlocks();
+    return nNext;
+}
+
+UniValue getbudgetprojection(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "getbudgetprojection\n"
+            "\nShow the projection of which proposals will be paid the next cycle\n"
+
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"Name\": \"xxxx\",               (string) Proposal Name\n"
+  
