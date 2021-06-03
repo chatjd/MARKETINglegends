@@ -946,4 +946,95 @@ UniValue mnfinalbudget(const UniValue& params, bool fHelp)
         CKey keyMasternode;
         std::string errorMessage;
 
-        if (!obfuScationSigner.SetKey(strMasterNodePrivKey, errorMessage, keyMasternode, pubKeyMasternode)
+        if (!obfuScationSigner.SetKey(strMasterNodePrivKey, errorMessage, keyMasternode, pubKeyMasternode))
+            return "Error upon calling SetKey";
+
+        CMasternode* pmn = mnodeman.Find(activeMasternode.vin);
+        if (pmn == NULL) {
+            return "Failure to find masternode in list : " + activeMasternode.vin.ToString();
+        }
+
+        CFinalizedBudgetVote vote(activeMasternode.vin, hash);
+        if (!vote.Sign(keyMasternode, pubKeyMasternode)) {
+            return "Failure to sign.";
+        }
+
+        std::string strError = "";
+        if (budget.UpdateFinalizedBudget(vote, NULL, strError)) {
+            budget.mapSeenFinalizedBudgetVotes.insert(make_pair(vote.GetHash(), vote));
+            vote.Relay();
+            return "success";
+        } else {
+            return "Error voting : " + strError;
+        }
+    }
+
+    if (strCommand == "show") {
+        UniValue resultObj(UniValue::VOBJ);
+
+        std::vector<CFinalizedBudget*> winningFbs = budget.GetFinalizedBudgets();
+        BOOST_FOREACH (CFinalizedBudget* finalizedBudget, winningFbs) {
+            UniValue bObj(UniValue::VOBJ);
+            bObj.push_back(Pair("FeeTX", finalizedBudget->nFeeTXHash.ToString()));
+            bObj.push_back(Pair("Hash", finalizedBudget->GetHash().ToString()));
+            bObj.push_back(Pair("BlockStart", (int64_t)finalizedBudget->GetBlockStart()));
+            bObj.push_back(Pair("BlockEnd", (int64_t)finalizedBudget->GetBlockEnd()));
+            bObj.push_back(Pair("Proposals", finalizedBudget->GetProposals()));
+            bObj.push_back(Pair("VoteCount", (int64_t)finalizedBudget->GetVoteCount()));
+            bObj.push_back(Pair("Status", finalizedBudget->GetStatus()));
+
+            std::string strError = "";
+            bObj.push_back(Pair("IsValid", finalizedBudget->IsValid(strError)));
+            bObj.push_back(Pair("IsValidReason", strError.c_str()));
+
+            resultObj.push_back(Pair(finalizedBudget->GetName(), bObj));
+        }
+
+        return resultObj;
+    }
+
+    if (strCommand == "getvotes") {
+        if (params.size() != 2)
+            throw runtime_error("Correct usage is 'mnbudget getvotes budget-hash'");
+
+        std::string strHash = params[1].get_str();
+        uint256 hash;
+        hash = ArithToUint256(arith_uint256(strHash));
+
+        UniValue obj(UniValue::VOBJ);
+
+        CFinalizedBudget* pfinalBudget = budget.FindFinalizedBudget(hash);
+
+        if (pfinalBudget == NULL) return "Unknown budget hash";
+
+        std::map<uint256, CFinalizedBudgetVote>::iterator it = pfinalBudget->mapVotes.begin();
+        while (it != pfinalBudget->mapVotes.end()) {
+            UniValue bObj(UniValue::VOBJ);
+            bObj.push_back(Pair("nHash", (*it).first.ToString().c_str()));
+            bObj.push_back(Pair("nTime", (int64_t)(*it).second.nTime));
+            bObj.push_back(Pair("fValid", (*it).second.fValid));
+
+            obj.push_back(Pair((*it).second.vin.prevout.ToStringShort(), bObj));
+
+            it++;
+        }
+
+        return obj;
+    }
+
+    return NullUniValue;
+}
+
+UniValue checkbudgets(const UniValue& params, bool fHelp)
+{
+    if (fHelp || params.size() != 0)
+        throw runtime_error(
+            "checkbudgets\n"
+            "\nInitiates a buddget check cycle manually\n"
+            "\nExamples:\n" +
+            HelpExampleCli("checkbudgets", "") + HelpExampleRpc("checkbudgets", ""));
+
+    budget.CheckAndRemove();
+
+    return NullUniValue;
+}
