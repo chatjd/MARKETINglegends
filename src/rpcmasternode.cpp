@@ -665,4 +665,171 @@ UniValue startmasternode (const UniValue& params, bool fHelp)
 
         UniValue resultsObj(UniValue::VARR);
         UniValue statusObj(UniValue::VOBJ);
-        statusObj.push_back(P
+        statusObj.push_back(Pair("alias", alias));
+
+        BOOST_FOREACH (CMasternodeConfig::CMasternodeEntry mne, masternodeConfig.getEntries()) {
+            if (mne.getAlias() == alias) {
+                found = true;
+                std::string errorMessage;
+
+                bool result = activeMasternode.Register(mne.getIp(), mne.getPrivKey(), mne.getTxHash(), mne.getOutputIndex(), errorMessage);
+
+                statusObj.push_back(Pair("result", result ? "successful" : "failed"));
+
+                if (result) {
+                    successful++;
+                    statusObj.push_back(Pair("error", ""));
+                } else {
+                    failed++;
+                    statusObj.push_back(Pair("error", errorMessage));
+                }
+                break;
+            }
+        }
+
+        if (!found) {
+            failed++;
+            statusObj.push_back(Pair("result", "failed"));
+            statusObj.push_back(Pair("error", "could not find alias in config. Verify with list-conf."));
+        }
+
+        resultsObj.push_back(statusObj);
+
+        if (fLock)
+            pwalletMain->Lock();
+
+        UniValue returnObj(UniValue::VOBJ);
+        returnObj.push_back(Pair("overall", strprintf("Successfully started %d masternodes, failed to start %d, total %d", successful, failed, successful + failed)));
+        returnObj.push_back(Pair("detail", resultsObj));
+
+        return returnObj;
+    }
+    return NullUniValue;
+}
+
+UniValue createmasternodekey (const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() != 0))
+        throw runtime_error(
+            "createmasternodekey\n"
+            "\nCreate a new masternode private key\n"
+
+            "\nResult:\n"
+            "\"key\"    (string) Masternode private key\n"
+            "\nExamples:\n" +
+            HelpExampleCli("createmasternodekey", "") + HelpExampleRpc("createmasternodekey", ""));
+
+    CKey secret;
+    secret.MakeNewKey(false);
+
+    return EncodeSecret(secret);
+}
+
+UniValue getmasternodeoutputs (const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() != 0))
+        throw runtime_error(
+            "getmasternodeoutputs\n"
+            "\nPrint all masternode transaction outputs\n"
+
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"txhash\": \"xxxx\",    (string) output transaction hash\n"
+            "    \"outputidx\": n       (numeric) output index number\n"
+            "  }\n"
+            "  ,...\n"
+            "]\n"
+
+            "\nExamples:\n" +
+            HelpExampleCli("getmasternodeoutputs", "") + HelpExampleRpc("getmasternodeoutputs", ""));
+
+    // Find possible candidates
+    vector<COutput> possibleCoins = activeMasternode.SelectCoinsMasternode();
+
+    UniValue ret(UniValue::VARR);
+    BOOST_FOREACH (COutput& out, possibleCoins) {
+        UniValue obj(UniValue::VOBJ);
+        obj.push_back(Pair("txhash", out.tx->GetHash().ToString()));
+        obj.push_back(Pair("outputidx", out.i));
+        ret.push_back(obj);
+    }
+
+    return ret;
+}
+
+UniValue listmasternodeconf (const UniValue& params, bool fHelp)
+{
+    std::string strFilter = "";
+
+    if (params.size() == 1) strFilter = params[0].get_str();
+
+    if (fHelp || (params.size() > 1))
+        throw runtime_error(
+            "listmasternodeconf ( \"filter\" )\n"
+            "\nPrint masternode.conf in JSON format\n"
+
+            "\nArguments:\n"
+            "1. \"filter\"    (string, optional) Filter search text. Partial match on alias, address, txHash, or status.\n"
+
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"alias\": \"xxxx\",        (string) masternode alias\n"
+            "    \"address\": \"xxxx\",      (string) masternode IP address\n"
+            "    \"privateKey\": \"xxxx\",   (string) masternode private key\n"
+            "    \"txHash\": \"xxxx\",       (string) transaction hash\n"
+            "    \"outputIndex\": n,       (numeric) transaction output index\n"
+            "    \"status\": \"xxxx\"        (string) masternode status\n"
+            "  }\n"
+            "  ,...\n"
+            "]\n"
+
+            "\nExamples:\n" +
+            HelpExampleCli("listmasternodeconf", "") + HelpExampleRpc("listmasternodeconf", ""));
+
+    std::vector<CMasternodeConfig::CMasternodeEntry> mnEntries;
+    mnEntries = masternodeConfig.getEntries();
+
+    UniValue ret(UniValue::VARR);
+
+    BOOST_FOREACH (CMasternodeConfig::CMasternodeEntry mne, masternodeConfig.getEntries()) {
+        int nIndex;
+        if(!mne.castOutputIndex(nIndex))
+            continue;
+        CTxIn vin = CTxIn(uint256S(mne.getTxHash()), uint32_t(nIndex));
+        CMasternode* pmn = mnodeman.Find(vin);
+
+        std::string strStatus = pmn ? pmn->Status() : "MISSING";
+
+        if (strFilter != "" && mne.getAlias().find(strFilter) == string::npos &&
+            mne.getIp().find(strFilter) == string::npos &&
+            mne.getTxHash().find(strFilter) == string::npos &&
+            strStatus.find(strFilter) == string::npos) continue;
+
+        UniValue mnObj(UniValue::VARR);
+        mnObj.push_back(Pair("alias", mne.getAlias()));
+        mnObj.push_back(Pair("address", mne.getIp()));
+        mnObj.push_back(Pair("privateKey", mne.getPrivKey()));
+        mnObj.push_back(Pair("txHash", mne.getTxHash()));
+        mnObj.push_back(Pair("outputIndex", mne.getOutputIndex()));
+        mnObj.push_back(Pair("status", strStatus));
+        ret.push_back(mnObj);
+    }
+
+    return ret;
+}
+
+UniValue getmasternodestatus (const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() != 0))
+        throw runtime_error(
+            "getmasternodestatus\n"
+            "\nPrint masternode status\n"
+
+            "\nResult:\n"
+            "{\n"
+            "  \"txhash\": \"xxxx\",      (string) Collateral transaction hash\n"
+            "  \"outputidx\": n,        (numeric) Collateral transaction output index number\n"
+            "  \"netaddr\": \"xxxx\",     (string) Masternode network address\n"
+            "  \"addr\": \"xxxx\",        (string) Vidulum address f
