@@ -200,4 +200,160 @@ UniValue masternode(const UniValue& params, bool fHelp)
 
     if (strCommand == "debug") {
         UniValue newParams(UniValue::VARR);
-        for (unsigned int i = 1; i <
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return masternodedebug(newParams, fHelp);
+    }
+
+    if (strCommand == "start" || strCommand == "start-alias" || strCommand == "start-many" || strCommand == "start-all" || strCommand == "start-missing" || strCommand == "start-disabled") {
+        return startmasternode(params, fHelp);
+    }
+
+    if (strCommand == "genkey") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return createmasternodekey(newParams, fHelp);
+    }
+
+    if (strCommand == "list-conf") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return listmasternodeconf(newParams, fHelp);
+    }
+
+    if (strCommand == "outputs") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return getmasternodeoutputs(newParams, fHelp);
+    }
+
+    if (strCommand == "status") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return getmasternodestatus(newParams, fHelp);
+    }
+
+    if (strCommand == "winners") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return getmasternodewinners(newParams, fHelp);
+    }
+
+    if (strCommand == "calcscore") {
+        UniValue newParams(UniValue::VARR);
+        for (unsigned int i = 1; i < params.size(); i++) {
+            newParams.push_back(params[i]);
+        }
+        return getmasternodescores(newParams, fHelp);
+    }
+
+    return NullUniValue;
+}
+
+UniValue listmasternodes(const UniValue& params, bool fHelp)
+{
+    std::string strFilter = "";
+
+    if (params.size() == 1) strFilter = params[0].get_str();
+
+    if (fHelp || (params.size() > 1))
+        throw runtime_error(
+            "listmasternodes ( \"filter\" )\n"
+            "\nGet a ranked list of masternodes\n"
+
+            "\nArguments:\n"
+            "1. \"filter\"    (string, optional) Filter search text. Partial match by txhash, status, or addr.\n"
+
+            "\nResult:\n"
+            "[\n"
+            "  {\n"
+            "    \"rank\": n,           (numeric) Masternode Rank (or 0 if not enabled)\n"
+            "    \"txhash\": \"hash\",    (string) Collateral transaction hash\n"
+            "    \"outidx\": n,         (numeric) Collateral transaction output index\n"
+            "    \"status\": s,         (string) Status (ENABLED/EXPIRED/REMOVE/etc)\n"
+            "    \"addr\": \"addr\",      (string) Masternode Vidulum address\n"
+            "    \"version\": v,        (numeric) Masternode protocol version\n"
+            "    \"lastseen\": ttt,     (numeric) The time in seconds since epoch (Jan 1 1970 GMT) of the last seen\n"
+            "    \"activetime\": ttt,   (numeric) The time in seconds since epoch (Jan 1 1970 GMT) masternode has been active\n"
+            "    \"lastpaid\": ttt,     (numeric) The time in seconds since epoch (Jan 1 1970 GMT) masternode was last paid\n"
+            "  }\n"
+            "  ,...\n"
+            "]\n"
+            "\nExamples:\n" +
+            HelpExampleCli("masternodelist", "") + HelpExampleRpc("masternodelist", ""));
+
+    UniValue ret(UniValue::VARR);
+    int nHeight;
+    {
+        LOCK(cs_main);
+        CBlockIndex* pindex = chainActive.Tip();
+        if(!pindex) return 0;
+        nHeight = pindex->nHeight;
+    }
+    std::vector<pair<int, CMasternode> > vMasternodeRanks = mnodeman.GetMasternodeRanks(nHeight);
+    BOOST_FOREACH (PAIRTYPE(int, CMasternode) & s, vMasternodeRanks) {
+        UniValue obj(UniValue::VOBJ);
+        //std::string strVin = s.second.vin.prevout.ToStringShort();
+        std::string strTxHash = s.second.vin.prevout.hash.ToString();
+        uint32_t oIdx = s.second.vin.prevout.n;
+
+        CMasternode* mn = mnodeman.Find(s.second.vin);
+
+        if (mn != NULL) {
+            if (strFilter != "" && strTxHash.find(strFilter) == string::npos &&
+                mn->Status().find(strFilter) == string::npos &&
+                EncodeDestination(mn->pubKeyCollateralAddress.GetID()).find(strFilter) == string::npos) continue;
+
+            std::string strStatus = mn->Status();
+            std::string strHost;
+            int port;
+            SplitHostPort(mn->addr.ToString(), port, strHost);
+            CNetAddr node = CNetAddr(strHost, false);
+            std::string strNetwork = GetNetworkName(node.GetNetwork());
+
+            obj.push_back(Pair("rank", (strStatus == "ENABLED" ? s.first : 0)));
+            obj.push_back(Pair("network", strNetwork));
+            obj.push_back(Pair("ip", strHost));
+            obj.push_back(Pair("txhash", strTxHash));
+            obj.push_back(Pair("outidx", (uint64_t)oIdx));
+            obj.push_back(Pair("status", strStatus));
+            obj.push_back(Pair("addr", EncodeDestination(mn->pubKeyCollateralAddress.GetID())));
+            obj.push_back(Pair("version", mn->protocolVersion));
+            obj.push_back(Pair("lastseen", (int64_t)mn->lastPing.sigTime));
+            obj.push_back(Pair("activetime", (int64_t)(mn->lastPing.sigTime - mn->sigTime)));
+            obj.push_back(Pair("lastpaid", (int64_t)mn->GetLastPaid()));
+
+            ret.push_back(obj);
+        }
+    }
+
+    return ret;
+}
+
+UniValue startalias(const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() != 1))
+        throw runtime_error(
+            "startalias \"aliasname\"\n"
+            "\nAttempts to start an alias\n"
+
+            "\nArguments:\n"
+            "1. \"aliasname\"     (string, required) alias name\n"
+
+            "\nExamples:\n" +
+            HelpExampleCli("startalias", "\"mn1\"") + HelpExampleRpc("startalias", ""));
+    if (!masternodeSync.IsSynced())
+    {
+        UniValue obj(UniValue::VOBJ);
+        std::string error = "Masternode is not synced, please wait. Current statu
