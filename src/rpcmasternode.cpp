@@ -356,4 +356,167 @@ UniValue startalias(const UniValue& params, bool fHelp)
     if (!masternodeSync.IsSynced())
     {
         UniValue obj(UniValue::VOBJ);
-        std::string error = "Masternode is not synced, please wait. Current statu
+        std::string error = "Masternode is not synced, please wait. Current status: " + masternodeSync.GetSyncStatus();
+        obj.push_back(Pair("result", error));
+        return obj;
+    }
+
+    std::string strAlias = params[0].get_str();
+    bool fSuccess = false;
+    BOOST_FOREACH (CMasternodeConfig::CMasternodeEntry mne, masternodeConfig.getEntries()) {
+        if (mne.getAlias() == strAlias) {
+            std::string strError;
+            CMasternodeBroadcast mnb;
+
+            fSuccess = CMasternodeBroadcast::Create(mne.getIp(), mne.getPrivKey(), mne.getTxHash(), mne.getOutputIndex(), strError, mnb);
+
+            if (fSuccess) {
+                mnodeman.UpdateMasternodeList(mnb);
+                mnb.Relay();
+            }
+            break;
+        }
+    }
+    if (fSuccess) {
+        UniValue obj(UniValue::VOBJ);
+        obj.push_back(Pair("result", "Successfully started alias"));
+        return obj;
+    } else {
+        throw runtime_error("Failed to start alias\n");
+    }
+}
+
+UniValue masternodeconnect(const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() != 1))
+        throw runtime_error(
+            "masternodeconnect \"address\"\n"
+            "\nAttempts to connect to specified masternode address\n"
+
+            "\nArguments:\n"
+            "1. \"address\"     (string, required) IP or net address to connect to\n"
+
+            "\nExamples:\n" +
+            HelpExampleCli("masternodeconnect", "\"192.168.0.6:7676\"") + HelpExampleRpc("masternodeconnect", "\"192.168.0.6:7676\""));
+
+    std::string strAddress = params[0].get_str();
+
+    CService addr = CService(strAddress);
+
+    CNode* pnode = ConnectNode((CAddress)addr, NULL, false);
+    if (pnode) {
+        pnode->Release();
+        return NullUniValue;
+    } else {
+        throw runtime_error("error connecting\n");
+    }
+}
+
+UniValue getmasternodecount (const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() > 0))
+        throw runtime_error(
+            "getmasternodecount\n"
+            "\nGet masternode count values\n"
+
+            "\nResult:\n"
+            "{\n"
+            "  \"total\": n,        (numeric) Total masternodes\n"
+            "  \"stable\": n,       (numeric) Stable count\n"
+            "  \"obfcompat\": n,    (numeric) Obfuscation Compatible\n"
+            "  \"enabled\": n,      (numeric) Enabled masternodes\n"
+            "  \"inqueue\": n       (numeric) Masternodes in queue\n"
+            "}\n"
+            "\nExamples:\n" +
+            HelpExampleCli("getmasternodecount", "") + HelpExampleRpc("getmasternodecount", ""));
+
+    UniValue obj(UniValue::VOBJ);
+    int nCount = 0;
+    int ipv4 = 0, ipv6 = 0, onion = 0;
+
+    if (chainActive.Tip())
+        mnodeman.GetNextMasternodeInQueueForPayment(chainActive.Tip()->nHeight, true, nCount);
+
+    mnodeman.CountNetworks(ActiveProtocol(), ipv4, ipv6, onion);
+
+    obj.push_back(Pair("total", mnodeman.size()));
+    obj.push_back(Pair("stable", mnodeman.stable_size()));
+    obj.push_back(Pair("obfcompat", mnodeman.CountEnabled(ActiveProtocol())));
+    obj.push_back(Pair("enabled", mnodeman.CountEnabled()));
+    obj.push_back(Pair("inqueue", nCount));
+    obj.push_back(Pair("ipv4", ipv4));
+    obj.push_back(Pair("ipv6", ipv6));
+    obj.push_back(Pair("onion", onion));
+
+    return obj;
+}
+
+UniValue masternodecurrent (const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() != 0))
+        throw runtime_error(
+            "masternodecurrent\n"
+            "\nGet current masternode winner\n"
+
+            "\nResult:\n"
+            "{\n"
+            "  \"protocol\": xxxx,        (numeric) Protocol version\n"
+            "  \"txhash\": \"xxxx\",      (string) Collateral transaction hash\n"
+            "  \"pubkey\": \"xxxx\",      (string) MN Public key\n"
+            "  \"lastseen\": xxx,       (numeric) Time since epoch of last seen\n"
+            "  \"activeseconds\": xxx,  (numeric) Seconds MN has been active\n"
+            "}\n"
+            "\nExamples:\n" +
+            HelpExampleCli("masternodecurrent", "") + HelpExampleRpc("masternodecurrent", ""));
+
+    CMasternode* winner = mnodeman.GetCurrentMasterNode(1);
+    if (winner) {
+        UniValue obj(UniValue::VOBJ);
+
+        obj.push_back(Pair("protocol", (int64_t)winner->protocolVersion));
+        obj.push_back(Pair("txhash", winner->vin.prevout.hash.ToString()));
+        obj.push_back(Pair("pubkey", EncodeDestination(winner->pubKeyCollateralAddress.GetID())));
+        obj.push_back(Pair("lastseen", (winner->lastPing == CMasternodePing()) ? winner->sigTime : (int64_t)winner->lastPing.sigTime));
+        obj.push_back(Pair("activeseconds", (winner->lastPing == CMasternodePing()) ? 0 : (int64_t)(winner->lastPing.sigTime - winner->sigTime)));
+        return obj;
+    }
+
+    throw runtime_error("unknown");
+}
+
+UniValue masternodedebug (const UniValue& params, bool fHelp)
+{
+    if (fHelp || (params.size() != 0))
+        throw runtime_error(
+            "masternodedebug\n"
+            "\nPrint masternode status\n"
+
+            "\nResult:\n"
+            "\"status\"     (string) Masternode status message\n"
+            "\nExamples:\n" +
+            HelpExampleCli("masternodedebug", "") + HelpExampleRpc("masternodedebug", ""));
+
+    if (activeMasternode.status != ACTIVE_MASTERNODE_INITIAL || !masternodeSync.IsSynced())
+        return activeMasternode.GetStatus();
+
+    CTxIn vin = CTxIn();
+    CPubKey pubkey = CPubKey();
+    CKey key;
+    if (!activeMasternode.GetMasterNodeVin(vin, pubkey, key))
+        throw runtime_error("Missing masternode input, please look at the documentation for instructions on masternode creation\n");
+    else
+        return activeMasternode.GetStatus();
+}
+
+UniValue startmasternode (const UniValue& params, bool fHelp)
+{
+    std::string strCommand;
+    if (params.size() >= 1) {
+        strCommand = params[0].get_str();
+
+        // Backwards compatibility with legacy 'masternode' super-command forwarder
+        if (strCommand == "start") strCommand = "local";
+        if (strCommand == "start-alias") strCommand = "alias";
+        if (strCommand == "start-all") strCommand = "all";
+        if (strCommand == "start-many") strCommand = "many";
+        if 
