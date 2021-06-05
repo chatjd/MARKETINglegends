@@ -372,3 +372,14 @@ bool DummySignatureCreator::CreateSig(
 {
     // Create a dummy signature that is a valid DER-encoding
     vchSig.assign(72, '\000');
+    vchSig[0] = 0x30;
+    vchSig[1] = 69;
+    vchSig[2] = 0x02;
+    vchSig[3] = 33;
+    vchSig[4] = 0x01;
+    vchSig[4 + 33] = 0x02;
+    vchSig[5 + 33] = 32;
+    vchSig[6 + 33] = 0x01;
+    vchSig[6 + 33 + 32] = SIGHASH_ALL;
+    return true;
+}
