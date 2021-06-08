@@ -68,4 +68,23 @@ SECP256K1_WARN_UNUSED_RESULT int ec_privkey_export_der(
  * Out:  seckey:     pointer to a 32-byte array for storing the private key.
  *                   (cannot be NULL).
  * In:   privkey:    pointer to a private key in DER format (cannot be NULL).
- *       privkeylen: length o
+ *       privkeylen: length of the DER private key pointed to be privkey.
+ *
+ * This function will accept more than just strict DER, and even allow some BER
+ * violations. The public key stored inside the DER-encoded private key is not
+ * verified for correctness, nor are the curve parameters. Use this function
+ * only if you know in advance it is supposed to contain a secp256k1 private
+ * key.
+ */
+SECP256K1_WARN_UNUSED_RESULT int ec_privkey_import_der(
+    const secp256k1_context* ctx,
+    unsigned char *seckey,
+    const unsigned char *privkey,
+    size_t privkeylen
+) SECP256K1_ARG_NONNULL(1) SECP256K1_ARG_NONNULL(2) SECP256K1_ARG_NONNULL(3);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* SECP256K1_CONTRIB_BER_PRIVATEKEY_H */
