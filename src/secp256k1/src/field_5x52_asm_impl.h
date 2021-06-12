@@ -478,4 +478,25 @@ __asm__ __volatile__(
     /* c += t3 */
     "addq %%r10,%%r8\n"
     /* c += d * R */
-    "movq %%r
+    "movq %%rbx,%%rax\n"
+    "movq $0x1000003d10,%%rdx\n"
+    "mulq %%rdx\n"
+    "addq %%rax,%%r8\n"
+    "adcq %%rdx,%%r9\n"
+    /* r[3] = c & M */
+    "movq %%r8,%%rax\n"
+    "andq %%r15,%%rax\n"
+    "movq %%rax,24(%%rdi)\n"
+    /* c >>= 52 (%%r8 only) */
+    "shrdq $52,%%r9,%%r8\n"
+    /* c += t4 (%%r8 only) */
+    "addq %%rsi,%%r8\n"
+    /* r[4] = c */
+    "movq %%r8,32(%%rdi)\n"
+: "+S"(a), "=m"(tmp1), "=m"(tmp2), "=m"(tmp3)
+: "D"(r)
+: "%rax", "%rbx", "%rcx", "%rdx", "%r8", "%r9", "%r10", "%r11", "%r12", "%r13", "%r14", "%r15", "cc", "memory"
+);
+}
+
+#endif /* SECP256K1_FIELD_INNER5X52_IMPL_H */
