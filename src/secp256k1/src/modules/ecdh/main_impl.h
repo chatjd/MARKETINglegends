@@ -42,4 +42,13 @@ int secp256k1_ecdh(const secp256k1_context* ctx, unsigned char *result, const se
 
         secp256k1_sha256_initialize(&sha);
         secp256k1_sha256_write(&sha, y, sizeof(y));
-        secp256k1_sha256_write(&sha, x, size
+        secp256k1_sha256_write(&sha, x, sizeof(x));
+        secp256k1_sha256_finalize(&sha, result);
+        ret = 1;
+    }
+
+    secp256k1_scalar_clear(&s);
+    return ret;
+}
+
+#endif /* SECP256K1_MODULE_ECDH_MAIN_H */
