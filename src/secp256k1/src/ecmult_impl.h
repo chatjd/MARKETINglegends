@@ -325,4 +325,82 @@ static void secp256k1_ecmult(const secp256k1_ecmult_context *ctx, secp256k1_gej 
 #else
     /* build wnaf representation for na. */
     bits_na     = secp256k1_ecmult_wnaf(wnaf_na,     256, na,      WINDOW_A);
-    b
+    bits = bits_na;
+#endif
+
+    /* Calculate odd multiples of a.
+     * All multiples are brought to the same Z 'denominator', which is stored
+     * in Z. Due to secp256k1' isomorphism we can do all operations pretending
+     * that the Z coordinate was 1, use affine addition formulae, and correct
+     * the Z coordinate of the result once at the end.
+     * The exception is the precomputed G table points, which are actually
+     * affine. Compared to the base used for other points, they have a Z ratio
+     * of 1/Z, so we can use secp256k1_gej_add_zinv_var, which uses the same
+     * isomorphism to efficiently add with a known Z inverse.
+     */
+    secp256k1_ecmult_odd_multiples_table_globalz_windowa(pre_a, &Z, a);
+
+#ifdef USE_ENDOMORPHISM
+    for (i = 0; i < ECMULT_TABLE_SIZE(WINDOW_A); i++) {
+        secp256k1_ge_mul_lambda(&pre_a_lam[i], &pre_a[i]);
+    }
+
+    /* split ng into ng_1 and ng_128 (where gn = gn_1 + gn_128*2^128, and gn_1 and gn_128 are ~128 bit) */
+    secp256k1_scalar_split_128(&ng_1, &ng_128, ng);
+
+    /* Build wnaf representation for ng_1 and ng_128 */
+    bits_ng_1   = secp256k1_ecmult_wnaf(wnaf_ng_1,   129, &ng_1,   WINDOW_G);
+    bits_ng_128 = secp256k1_ecmult_wnaf(wnaf_ng_128, 129, &ng_128, WINDOW_G);
+    if (bits_ng_1 > bits) {
+        bits = bits_ng_1;
+    }
+    if (bits_ng_128 > bits) {
+        bits = bits_ng_128;
+    }
+#else
+    bits_ng     = secp256k1_ecmult_wnaf(wnaf_ng,     256, ng,      WINDOW_G);
+    if (bits_ng > bits) {
+        bits = bits_ng;
+    }
+#endif
+
+    secp256k1_gej_set_infinity(r);
+
+    for (i = bits - 1; i >= 0; i--) {
+        int n;
+        secp256k1_gej_double_var(r, r, NULL);
+#ifdef USE_ENDOMORPHISM
+        if (i < bits_na_1 && (n = wnaf_na_1[i])) {
+            ECMULT_TABLE_GET_GE(&tmpa, pre_a, n, WINDOW_A);
+            secp256k1_gej_add_ge_var(r, r, &tmpa, NULL);
+        }
+        if (i < bits_na_lam && (n = wnaf_na_lam[i])) {
+            ECMULT_TABLE_GET_GE(&tmpa, pre_a_lam, n, WINDOW_A);
+            secp256k1_gej_add_ge_var(r, r, &tmpa, NULL);
+        }
+        if (i < bits_ng_1 && (n = wnaf_ng_1[i])) {
+            ECMULT_TABLE_GET_GE_STORAGE(&tmpa, *ctx->pre_g, n, WINDOW_G);
+            secp256k1_gej_add_zinv_var(r, r, &tmpa, &Z);
+        }
+        if (i < bits_ng_128 && (n = wnaf_ng_128[i])) {
+            ECMULT_TABLE_GET_GE_STORAGE(&tmpa, *ctx->pre_g_128, n, WINDOW_G);
+            secp256k1_gej_add_zinv_var(r, r, &tmpa, &Z);
+        }
+#else
+        if (i < bits_na && (n = wnaf_na[i])) {
+            ECMULT_TABLE_GET_GE(&tmpa, pre_a, n, WINDOW_A);
+            secp256k1_gej_add_ge_var(r, r, &tmpa, NULL);
+        }
+        if (i < bits_ng && (n = wnaf_ng[i])) {
+            ECMULT_TABLE_GET_GE_STORAGE(&tmpa, *ctx->pre_g, n, WINDOW_G);
+            secp256k1_gej_add_zinv_var(r, r, &tmpa, &Z);
+        }
+#endif
+    }
+
+    if (!r->infinity) {
+        secp256k1_fe_mul(&r->z, &r->z, &Z);
+    }
+}
+
+#endif /* SECP256K1_ECMULT_IMPL_H */
