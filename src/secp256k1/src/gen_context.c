@@ -51,4 +51,24 @@ int main(int argc, char **argv) {
         fprintf(fp,"{\n");
         for(inner = 0; inner != 16; inner++) {
             fprintf(fp,"    SC(%uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu, %uu)", SECP256K1_GE_STORAGE_CONST_GET((*ctx.prec)[outer][inner]));
-   
+            if (inner != 15) {
+                fprintf(fp,",\n");
+            } else {
+                fprintf(fp,"\n");
+            }
+        }
+        if (outer != 63) {
+            fprintf(fp,"},\n");
+        } else {
+            fprintf(fp,"}\n");
+        }
+    }
+    fprintf(fp,"};\n");
+    secp256k1_ecmult_gen_context_clear(&ctx);
+    
+    fprintf(fp, "#undef SC\n");
+    fprintf(fp, "#endif\n");
+    fclose(fp);
+    
+    return 0;
+}
