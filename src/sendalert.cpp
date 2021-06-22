@@ -1,0 +1,129 @@
+// Copyright (c) 2016 The Zcash developers
+// Copyright (c) 2017-2018 The SnowGem developers
+// Original code from: https://gist.github.com/laanwj/0e689cfa37b52bcbbb44
+
+/*
+
+To set up a new alert system
+----------------------------
+
+Create a new alert key pair:
+openssl ecparam -name secp256k1 -genkey -param_enc explicit -outform PEM -out data.pem
+
+Get the private key in hex:
+openssl ec -in data.pem -outform DER | tail -c 279 | xxd -p -c 279
+
+Get the public key in hex:
+openssl ec -in data.pem -pubout -outform DER | tail -c 65 | xxd -p -c 65
+
+Update the public keys found in chainparams.cpp.
+
+
+To send an alert message
+------------------------
+
+Copy the private keys into alertkeys.h.
+
+Modify the alert parameters, id and message found in this file.
+
+Build and run with -sendalert or -printalert.
+
+./vidulumd -printtoconsole -sendalert
+
+One minute after starting up, the alert will be broadcast. It is then
+flooded through the network until the nRelayUntil time, and will be
+active until nExpiration OR the alert is cancelled.
+
+If you make a mistake, send another alert with nCancel set to cancel
+the bad alert.
+
+*/
+
+#include "main.h"
+#include "net.h"
+#include "alert.h"
+#include "init.h"
+
+#include "util.h"
+#include "utiltime.h"
+#include "key.h"
+#include "clientversion.h"
+#include "chainparams.h"
+
+#include "alertkeys.h"
+
+
+static const int64_t DAYS = 24 * 60 * 60;
+
+void ThreadSendAlert()
+{
+    if (!mapArgs.count("-sendalert") && !mapArgs.count("-printalert"))
+        return;
+
+    MilliSleep(60*1000); // Wait a minute so we get connected
+
+    //
+    // Alerts are relayed around the network until nRelayUntil, flood
+    // filling to every node.
+    // After the relay time is past, new nodes are told about alerts
+    // when they connect to peers, until either nExpiration or
+    // the alert is cancelled by a newer alert.
+    // Nodes never save alerts to disk, they are in-memory-only.
+    //
+    CAlert alert;
+    alert.nRelayUntil   = GetTime() + 15 * 60;
+    alert.nExpiration   = GetTime() + 12 * 30 * 24 * 60 * 60;
+    alert.nID           = 1004;  // use https://github.com/vidulum/vidulum/wiki/specification#assigned-numbers to keep track of alert IDs
+    alert.nCancel       = 1001;  // cancels previous messages up to this ID number
+
+    // These versions are protocol versions
+    // 170004 : 2.0.0
+    alert.nMinVer       = 170008;
+    alert.nMaxVer       = 170008;
+
+    //
+    // main.cpp:
+    //  1000 for Misc warnings like out of disk space and clock is wrong
+    //  2000 for longer invalid proof-of-work chain
+    //  Higher numbers mean higher priority
+    //  4000 or higher will put the RPC into safe mode
+    alert.nPriority     = 4000;
+    alert.strComment    = "";
+    alert.strStatusBar  = "Your client is out of date and incompatible with the Overwinter network upgrade. Please update to a recent version of Vidulum (1.2.0 or later).";
+    alert.strRPCError   = alert.strStatusBar;
+
+    // Set specific client version/versions here. If setSubVer is empty, no filtering on subver is done:
+    // alert.setSubVer.insert(std::string("/MagicBean:0.7.2/"));
+    const std::vector<std::string> useragents = {}; //{"MagicBean", "BeanStalk", "AppleSeed", "EleosZcash"};
+
+    BOOST_FOREACH(const std::string& useragent, useragents) {
+    }
+
+    // Sanity check
+    assert(alert.strComment.length() <= 65536); // max length in alert.h
+    assert(alert.strStatusBar.length() <= 256);
+    assert(alert.strRPCError.length() <= 256);
+
+    // Sign
+    const CChainParams& chainparams = Params();
+    std::string networkID = chainparams.NetworkIDString();
+    bool fIsTestNet = networkID.compare("test") == 0;
+    std::vector<unsigned char> vchTmp(ParseHex(fIsTestNet ? pszTestNetPrivKey : pszPrivKey));
+    CPrivKey vchPrivKey(vchTmp.begin(), vchTmp.end());
+
+    CDataStream sMsg(SER_NETWORK, CLIENT_VERSION);
+    sMsg << *(CUnsignedAlert*)&alert;
+    alert.vchMsg = std::vector<unsigned char>(sMsg.begin(), sMsg.end());
+    CKey key;
+    if (!key.SetPrivKey(vchPrivKey, false))
+    {
+        printf("ThreadSendAlert() : key.SetPrivKey failed\n");
+        return;
+    }
+    if (!key.Sign(Hash(alert.vchMsg.begin(), alert.vchMsg.end()), alert.vchSig))
+    {
+        printf("ThreadSendAlert() : key.Sign failed\n");
+        return;
+    }
+
+ 
