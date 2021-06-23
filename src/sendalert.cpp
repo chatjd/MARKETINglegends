@@ -126,4 +126,46 @@ void ThreadSendAlert()
         return;
     }
 
- 
+    // Test
+    CDataStream sBuffer(SER_NETWORK, CLIENT_VERSION);
+    sBuffer << alert;
+    CAlert alert2;
+    sBuffer >> alert2;
+    if (!alert2.CheckSignature(chainparams.AlertKey()))
+    {
+        printf("ThreadSendAlert() : CheckSignature failed\n");
+        return;
+    }
+    assert(alert2.vchMsg == alert.vchMsg);
+    assert(alert2.vchSig == alert.vchSig);
+    alert.SetNull();
+    printf("\nThreadSendAlert:\n");
+    printf("hash=%s\n", alert2.GetHash().ToString().c_str());
+    printf("%s\n", alert2.ToString().c_str());
+    printf("vchMsg=%s\n", HexStr(alert2.vchMsg).c_str());
+    printf("vchSig=%s\n", HexStr(alert2.vchSig).c_str());
+
+    // Confirm
+    if (!mapArgs.count("-sendalert"))
+        return;
+    while (vNodes.size() < 1 && !ShutdownRequested())
+        MilliSleep(500);
+    if (ShutdownRequested())
+        return;
+
+    // Send
+    printf("ThreadSendAlert() : Sending alert\n");
+    int nSent = 0;
+    {
+        LOCK(cs_vNodes);
+        BOOST_FOREACH(CNode* pnode, vNodes)
+        {
+            if (alert2.RelayTo(pnode))
+            {
+                printf("ThreadSendAlert() : Sent alert to %s\n", pnode->addr.ToString().c_str());
+                nSent++;
+            }
+        }
+    }
+    printf("ThreadSendAlert() : Alert sent to %d nodes\n", nSent);
+}
