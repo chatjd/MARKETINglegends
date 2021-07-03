@@ -444,3 +444,81 @@ std::istream& operator>>(std::istream &in, alt_bn128_G1 &g)
         tY = tY2.sqrt();
 
         if ((tY.as_bigint().data[0] & 1) != Y_lsb)
+        {
+            tY = -tY;
+        }
+    }
+#endif
+    // using Jacobian coordinates
+    if (!is_zero)
+    {
+        g.X = tX;
+        g.Y = tY;
+        g.Z = alt_bn128_Fq::one();
+    }
+    else
+    {
+        g = alt_bn128_G1::zero();
+    }
+
+    return in;
+}
+
+std::ostream& operator<<(std::ostream& out, const std::vector<alt_bn128_G1> &v)
+{
+    out << v.size() << "\n";
+    for (const alt_bn128_G1& t : v)
+    {
+        out << t << OUTPUT_NEWLINE;
+    }
+
+    return out;
+}
+
+std::istream& operator>>(std::istream& in, std::vector<alt_bn128_G1> &v)
+{
+    v.clear();
+
+    size_t s;
+    in >> s;
+    consume_newline(in);
+
+    v.reserve(s);
+
+    for (size_t i = 0; i < s; ++i)
+    {
+        alt_bn128_G1 g;
+        in >> g;
+        consume_OUTPUT_NEWLINE(in);
+        v.emplace_back(g);
+    }
+
+    return in;
+}
+
+template<>
+void batch_to_special_all_non_zeros<alt_bn128_G1>(std::vector<alt_bn128_G1> &vec)
+{
+    std::vector<alt_bn128_Fq> Z_vec;
+    Z_vec.reserve(vec.size());
+
+    for (auto &el: vec)
+    {
+        Z_vec.emplace_back(el.Z);
+    }
+    batch_invert<alt_bn128_Fq>(Z_vec);
+
+    const alt_bn128_Fq one = alt_bn128_Fq::one();
+
+    for (size_t i = 0; i < vec.size(); ++i)
+    {
+        alt_bn128_Fq Z2 = Z_vec[i].squared();
+        alt_bn128_Fq Z3 = Z_vec[i] * Z2;
+
+        vec[i].X = vec[i].X * Z2;
+        vec[i].Y = vec[i].Y * Z3;
+        vec[i].Z = one;
+    }
+}
+
+} // libsnark
