@@ -489,4 +489,17 @@ void batch_to_special_all_non_zeros<alt_bn128_G2>(std::vector<alt_bn128_G2> &vec
     }
     batch_invert<alt_bn128_Fq2>(Z_vec);
 
-    const alt_bn128_Fq2 one = alt_bn128
+    const alt_bn128_Fq2 one = alt_bn128_Fq2::one();
+
+    for (size_t i = 0; i < vec.size(); ++i)
+    {
+        alt_bn128_Fq2 Z2 = Z_vec[i].squared();
+        alt_bn128_Fq2 Z3 = Z_vec[i] * Z2;
+
+        vec[i].X = vec[i].X * Z2;
+        vec[i].Y = vec[i].Y * Z3;
+        vec[i].Z = one;
+    }
+}
+
+} // libsnark
