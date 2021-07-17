@@ -352,3 +352,196 @@ alt_bn128_ate_G2_precomp alt_bn128_ate_precompute_G2(const alt_bn128_G2& Q)
     if (alt_bn128_ate_is_loop_count_neg)
     {
         R.Y = - R.Y;
+    }
+    Q2.Y = - Q2.Y;
+
+    mixed_addition_step_for_flipped_miller_loop(Q1, R, c);
+    result.coeffs.push_back(c);
+
+    mixed_addition_step_for_flipped_miller_loop(Q2, R, c);
+    result.coeffs.push_back(c);
+
+    leave_block("Call to alt_bn128_ate_precompute_G2");
+    return result;
+}
+
+alt_bn128_Fq12 alt_bn128_ate_miller_loop(const alt_bn128_ate_G1_precomp &prec_P,
+                                     const alt_bn128_ate_G2_precomp &prec_Q)
+{
+    enter_block("Call to alt_bn128_ate_miller_loop");
+
+    alt_bn128_Fq12 f = alt_bn128_Fq12::one();
+
+    bool found_one = false;
+    size_t idx = 0;
+
+    const bigint<alt_bn128_Fr::num_limbs> &loop_count = alt_bn128_ate_loop_count;
+    alt_bn128_ate_ell_coeffs c;
+
+    for (int64_t i = loop_count.max_bits(); i >= 0; --i)
+    {
+        const bool bit = loop_count.test_bit(i);
+        if (!found_one)
+        {
+            /* this skips the MSB itself */
+            found_one |= bit;
+            continue;
+        }
+
+        /* code below gets executed for all bits (EXCEPT the MSB itself) of
+           alt_bn128_param_p (skipping leading zeros) in MSB to LSB
+           order */
+
+        c = prec_Q.coeffs[idx++];
+        f = f.squared();
+        f = f.mul_by_024(c.ell_0, prec_P.PY * c.ell_VW, prec_P.PX * c.ell_VV);
+
+        if (bit)
+        {
+            c = prec_Q.coeffs[idx++];
+            f = f.mul_by_024(c.ell_0, prec_P.PY * c.ell_VW, prec_P.PX * c.ell_VV);
+        }
+
+    }
+
+    if (alt_bn128_ate_is_loop_count_neg)
+    {
+    	f = f.inverse();
+    }
+
+    c = prec_Q.coeffs[idx++];
+    f = f.mul_by_024(c.ell_0,prec_P.PY * c.ell_VW,prec_P.PX * c.ell_VV);
+
+    c = prec_Q.coeffs[idx++];
+    f = f.mul_by_024(c.ell_0,prec_P.PY * c.ell_VW,prec_P.PX * c.ell_VV);
+
+    leave_block("Call to alt_bn128_ate_miller_loop");
+    return f;
+}
+
+alt_bn128_Fq12 alt_bn128_ate_double_miller_loop(const alt_bn128_ate_G1_precomp &prec_P1,
+                                     const alt_bn128_ate_G2_precomp &prec_Q1,
+                                     const alt_bn128_ate_G1_precomp &prec_P2,
+                                     const alt_bn128_ate_G2_precomp &prec_Q2)
+{
+    enter_block("Call to alt_bn128_ate_double_miller_loop");
+
+    alt_bn128_Fq12 f = alt_bn128_Fq12::one();
+
+    bool found_one = false;
+    size_t idx = 0;
+
+    const bigint<alt_bn128_Fr::num_limbs> &loop_count = alt_bn128_ate_loop_count;
+    for (int64_t i = loop_count.max_bits(); i >= 0; --i)
+    {
+        const bool bit = loop_count.test_bit(i);
+        if (!found_one)
+        {
+            /* this skips the MSB itself */
+            found_one |= bit;
+            continue;
+        }
+
+        /* code below gets executed for all bits (EXCEPT the MSB itself) of
+           alt_bn128_param_p (skipping leading zeros) in MSB to LSB
+           order */
+
+        alt_bn128_ate_ell_coeffs c1 = prec_Q1.coeffs[idx];
+        alt_bn128_ate_ell_coeffs c2 = prec_Q2.coeffs[idx];
+        ++idx;
+
+        f = f.squared();
+
+        f = f.mul_by_024(c1.ell_0, prec_P1.PY * c1.ell_VW, prec_P1.PX * c1.ell_VV);
+        f = f.mul_by_024(c2.ell_0, prec_P2.PY * c2.ell_VW, prec_P2.PX * c2.ell_VV);
+
+        if (bit)
+        {
+            alt_bn128_ate_ell_coeffs c1 = prec_Q1.coeffs[idx];
+            alt_bn128_ate_ell_coeffs c2 = prec_Q2.coeffs[idx];
+            ++idx;
+
+            f = f.mul_by_024(c1.ell_0, prec_P1.PY * c1.ell_VW, prec_P1.PX * c1.ell_VV);
+            f = f.mul_by_024(c2.ell_0, prec_P2.PY * c2.ell_VW, prec_P2.PX * c2.ell_VV);
+        }
+    }
+
+    if (alt_bn128_ate_is_loop_count_neg)
+    {
+    	f = f.inverse();
+    }
+
+    alt_bn128_ate_ell_coeffs c1 = prec_Q1.coeffs[idx];
+    alt_bn128_ate_ell_coeffs c2 = prec_Q2.coeffs[idx];
+    ++idx;
+    f = f.mul_by_024(c1.ell_0, prec_P1.PY * c1.ell_VW, prec_P1.PX * c1.ell_VV);
+    f = f.mul_by_024(c2.ell_0, prec_P2.PY * c2.ell_VW, prec_P2.PX * c2.ell_VV);
+
+    c1 = prec_Q1.coeffs[idx];
+    c2 = prec_Q2.coeffs[idx];
+    ++idx;
+    f = f.mul_by_024(c1.ell_0, prec_P1.PY * c1.ell_VW, prec_P1.PX * c1.ell_VV);
+    f = f.mul_by_024(c2.ell_0, prec_P2.PY * c2.ell_VW, prec_P2.PX * c2.ell_VV);
+
+    leave_block("Call to alt_bn128_ate_double_miller_loop");
+
+    return f;
+}
+
+alt_bn128_Fq12 alt_bn128_ate_pairing(const alt_bn128_G1& P, const alt_bn128_G2 &Q)
+{
+    enter_block("Call to alt_bn128_ate_pairing");
+    alt_bn128_ate_G1_precomp prec_P = alt_bn128_ate_precompute_G1(P);
+    alt_bn128_ate_G2_precomp prec_Q = alt_bn128_ate_precompute_G2(Q);
+    alt_bn128_Fq12 result = alt_bn128_ate_miller_loop(prec_P, prec_Q);
+    leave_block("Call to alt_bn128_ate_pairing");
+    return result;
+}
+
+alt_bn128_GT alt_bn128_ate_reduced_pairing(const alt_bn128_G1 &P, const alt_bn128_G2 &Q)
+{
+    enter_block("Call to alt_bn128_ate_reduced_pairing");
+    const alt_bn128_Fq12 f = alt_bn128_ate_pairing(P, Q);
+    const alt_bn128_GT result = alt_bn128_final_exponentiation(f);
+    leave_block("Call to alt_bn128_ate_reduced_pairing");
+    return result;
+}
+
+/* choice of pairing */
+
+alt_bn128_G1_precomp alt_bn128_precompute_G1(const alt_bn128_G1& P)
+{
+    return alt_bn128_ate_precompute_G1(P);
+}
+
+alt_bn128_G2_precomp alt_bn128_precompute_G2(const alt_bn128_G2& Q)
+{
+    return alt_bn128_ate_precompute_G2(Q);
+}
+
+alt_bn128_Fq12 alt_bn128_miller_loop(const alt_bn128_G1_precomp &prec_P,
+                          const alt_bn128_G2_precomp &prec_Q)
+{
+    return alt_bn128_ate_miller_loop(prec_P, prec_Q);
+}
+
+alt_bn128_Fq12 alt_bn128_double_miller_loop(const alt_bn128_G1_precomp &prec_P1,
+                                 const alt_bn128_G2_precomp &prec_Q1,
+                                 const alt_bn128_G1_precomp &prec_P2,
+                                 const alt_bn128_G2_precomp &prec_Q2)
+{
+    return alt_bn128_ate_double_miller_loop(prec_P1, prec_Q1, prec_P2, prec_Q2);
+}
+
+alt_bn128_Fq12 alt_bn128_pairing(const alt_bn128_G1& P,
+                      const alt_bn128_G2 &Q)
+{
+    return alt_bn128_ate_pairing(P, Q);
+}
+
+alt_bn128_GT alt_bn128_reduced_pairing(const alt_bn128_G1 &P,
+                             const alt_bn128_G2 &Q)
+{
+    return alt_bn128_ate_reduced_pairing(P, Q);
+}
+} // libsnark
