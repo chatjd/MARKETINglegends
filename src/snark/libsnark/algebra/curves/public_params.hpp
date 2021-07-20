@@ -55,4 +55,49 @@ namespace libsnark {
                                                       const affine_ate_G2_precomp<EC_ppT> &prec_Q2,
                                                       const affine_ate_G1_precomp<EC_ppT> &prec_P3,
                                                       const affine_ate_G2_precomp<EC_ppT> &prec_Q3);
-  Fqk<EC_ppT> do
+  Fqk<EC_ppT> double_miller_loop(const G1_precomp<EC_ppT> &prec_P1,
+                                 const G2_precomp<EC_ppT> &prec_Q1,
+                                 const G1_precomp<EC_ppT> &prec_P2,
+                                 const G2_precomp<EC_ppT> &prec_Q2);
+
+  Fqk<EC_ppT> pairing(const G1<EC_ppT> &P,
+                      const G2<EC_ppT> &Q);
+  GT<EC_ppT> reduced_pairing(const G1<EC_ppT> &P,
+                             const G2<EC_ppT> &Q);
+  GT<EC_ppT> affine_reduced_pairing(const G1<EC_ppT> &P,
+                                    const G2<EC_ppT> &Q);
+*/
+
+template<typename EC_ppT>
+using Fr = typename EC_ppT::Fp_type;
+template<typename EC_ppT>
+using G1 = typename EC_ppT::G1_type;
+template<typename EC_ppT>
+using G2 = typename EC_ppT::G2_type;
+template<typename EC_ppT>
+using G1_precomp = typename EC_ppT::G1_precomp_type;
+template<typename EC_ppT>
+using G2_precomp = typename EC_ppT::G2_precomp_type;
+template<typename EC_ppT>
+using affine_ate_G1_precomp = typename EC_ppT::affine_ate_G1_precomp_type;
+template<typename EC_ppT>
+using affine_ate_G2_precomp = typename EC_ppT::affine_ate_G2_precomp_type;
+template<typename EC_ppT>
+using Fq = typename EC_ppT::Fq_type;
+template<typename EC_ppT>
+using Fqe = typename EC_ppT::Fqe_type;
+template<typename EC_ppT>
+using Fqk = typename EC_ppT::Fqk_type;
+template<typename EC_ppT>
+using GT = typename EC_ppT::GT_type;
+
+template<typename EC_ppT>
+using Fr_vector = std::vector<Fr<EC_ppT> >;
+template<typename EC_ppT>
+using G1_vector = std::vector<G1<EC_ppT> >;
+template<typename EC_ppT>
+using G2_vector = std::vector<G2<EC_ppT> >;
+
+} // libsnark
+
+#endif // PUBLIC_PARAMS_HPP_
