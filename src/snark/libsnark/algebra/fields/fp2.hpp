@@ -74,4 +74,47 @@ public:
     template<mp_size_t m>
     Fp2_model operator^(const bigint<m> &other) const;
 
-    static size_t size_in_bits() { return 2*my_
+    static size_t size_in_bits() { return 2*my_Fp::size_in_bits(); }
+    static bigint<n> base_field_char() { return modulus; }
+
+    friend std::ostream& operator<< <n, modulus>(std::ostream &out, const Fp2_model<n, modulus> &el);
+    friend std::istream& operator>> <n, modulus>(std::istream &in, Fp2_model<n, modulus> &el);
+};
+
+template<mp_size_t n, const bigint<n>& modulus>
+std::ostream& operator<<(std::ostream& out, const std::vector<Fp2_model<n, modulus> > &v);
+
+template<mp_size_t n, const bigint<n>& modulus>
+std::istream& operator>>(std::istream& in, std::vector<Fp2_model<n, modulus> > &v);
+
+template<mp_size_t n, const bigint<n>& modulus>
+Fp2_model<n, modulus> operator*(const Fp_model<n, modulus> &lhs, const Fp2_model<n, modulus> &rhs);
+
+template<mp_size_t n, const bigint<n>& modulus>
+bigint<2*n> Fp2_model<n, modulus>::euler;
+
+template<mp_size_t n, const bigint<n>& modulus>
+size_t Fp2_model<n, modulus>::s;
+
+template<mp_size_t n, const bigint<n>& modulus>
+bigint<2*n> Fp2_model<n, modulus>::t;
+
+template<mp_size_t n, const bigint<n>& modulus>
+bigint<2*n> Fp2_model<n, modulus>::t_minus_1_over_2;
+
+template<mp_size_t n, const bigint<n>& modulus>
+Fp_model<n, modulus> Fp2_model<n, modulus>::non_residue;
+
+template<mp_size_t n, const bigint<n>& modulus>
+Fp2_model<n, modulus> Fp2_model<n, modulus>::nqr;
+
+template<mp_size_t n, const bigint<n>& modulus>
+Fp2_model<n, modulus> Fp2_model<n, modulus>::nqr_to_t;
+
+template<mp_size_t n, const bigint<n>& modulus>
+Fp_model<n, modulus> Fp2_model<n, modulus>::Frobenius_coeffs_c1[2];
+
+} // libsnark
+#include "algebra/fields/fp2.tcc"
+
+#endif // FP2_HPP_
