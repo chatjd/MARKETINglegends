@@ -197,4 +197,129 @@ namespace libsnark {
         "adcq  %%rdx, %[c2]               \n\t" \
         "adcq  $0, %[c0]                  \n\t" \
                                                 \
-       
+        "movq  16(%[A]), %%rax            \n\t" \
+        "mulq  0(%[B])                    \n\t" \
+        "addq  %%rax, %[c1]               \n\t" \
+        "movq  %[c1], 16(%[res])          \n\t" \
+        "adcq  %%rdx, %[c2]               \n\t" \
+        "adcq  $0, %[c0]                  \n\t" \
+                                                \
+        "// register renaming (c2, c0, c1)\n\t" \
+        "xorq  %[c1], %[c1]               \n\t" \
+        "movq  8(%[A]), %%rax             \n\t" \
+        "mulq  16(%[B])                   \n\t" \
+        "addq  %%rax, %[c2]               \n\t" \
+        "adcq  %%rdx, %[c0]               \n\t" \
+        "adcq  $0, %[c1]                  \n\t" \
+                                                \
+        "movq  16(%[A]), %%rax            \n\t" \
+        "mulq  8(%[B])                    \n\t" \
+        "addq  %%rax, %[c2]               \n\t" \
+        "movq  %[c2], 24(%[res])          \n\t" \
+        "adcq  %%rdx, %[c0]               \n\t" \
+        "adcq  $0, %[c1]                  \n\t" \
+                                                \
+        "// register renaming (c0, c1, c2)\n\t" \
+        "xorq  %[c2], %[c2]               \n\t" \
+        "movq  16(%[A]), %%rax            \n\t" \
+        "mulq  16(%[B])                   \n\t" \
+        "addq  %%rax, %[c0]               \n\t" \
+        "movq  %[c0], 32(%[res])          \n\t" \
+        "adcq  %%rdx, %[c1]               \n\t" \
+        "movq  %[c1], 40(%[res])          \n\t" \
+        : [c0] "=&r" (c0_), [c1] "=&r" (c1_), [c2] "=&r" (c2_) \
+        : [res] "r" (res_), [A] "r" (A_), [B] "r" (B_)     \
+        : "%rax", "%rdx", "cc", "memory")
+
+#define COMBA_3_BY_3_SQR(c0_, c1_, c2_, res_, A_)    \
+    asm volatile (                              \
+        "xorq  %[c1], %[c1]               \n\t" \
+        "xorq  %[c2], %[c2]               \n\t" \
+        "movq  0(%[A]), %%rax             \n\t" \
+        "mulq  %%rax                      \n\t" \
+        "movq  %%rax, 0(%[res])           \n\t" \
+        "movq  %%rdx, %[c0]               \n\t" \
+                                                \
+        "movq  0(%[A]), %%rax             \n\t" \
+        "mulq  8(%[A])                    \n\t" \
+        "addq  %%rax, %[c0]               \n\t" \
+        "adcq  %%rdx, %[c1]               \n\t" \
+        "addq  %%rax, %[c0]               \n\t" \
+        "movq  %[c0], 8(%[res])           \n\t" \
+        "adcq  %%rdx, %[c1]               \n\t" \
+        "adcq  $0, %[c2]                  \n\t" \
+                                                \
+        "// register renaming (c1, c2, c0)\n\t" \
+        "movq  0(%[A]), %%rax             \n\t" \
+        "xorq  %[c0], %[c0]               \n\t" \
+        "mulq  16(%[A])                   \n\t" \
+        "addq  %%rax, %[c1]               \n\t" \
+        "adcq  %%rdx, %[c2]               \n\t" \
+        "adcq  $0, %[c0]                  \n\t" \
+        "addq  %%rax, %[c1]               \n\t" \
+        "adcq  %%rdx, %[c2]               \n\t" \
+        "adcq  $0, %[c0]                  \n\t" \
+                                                \
+        "movq  8(%[A]), %%rax             \n\t" \
+        "mulq  %%rax                      \n\t" \
+        "addq  %%rax, %[c1]               \n\t" \
+        "movq  %[c1], 16(%[res])          \n\t" \
+        "adcq  %%rdx, %[c2]               \n\t" \
+        "adcq  $0, %[c0]                  \n\t" \
+                                                \
+        "// register renaming (c2, c0, c1)\n\t" \
+        "movq  8(%[A]), %%rax             \n\t" \
+        "xorq  %[c1], %[c1]               \n\t" \
+        "mulq  16(%[A])                   \n\t" \
+        "addq  %%rax, %[c2]               \n\t" \
+        "adcq  %%rdx, %[c0]               \n\t" \
+        "adcq  $0, %[c1]                  \n\t" \
+        "addq  %%rax, %[c2]               \n\t" \
+        "movq  %[c2], 24(%[res])          \n\t" \
+        "adcq  %%rdx, %[c0]               \n\t" \
+        "adcq  $0, %[c1]                  \n\t" \
+                                                \
+        "// register renaming (c0, c1, c2)\n\t" \
+        "movq  16(%[A]), %%rax            \n\t" \
+        "mulq  %%rax                      \n\t" \
+        "addq  %%rax, %[c0]               \n\t" \
+        "movq  %[c0], 32(%[res])          \n\t" \
+        "adcq  %%rdx, %[c1]               \n\t" \
+        "movq  %[c1], 40(%[res])          \n\t" \
+                                                \
+        : [c0] "=&r" (c0_), [c1] "=&r" (c1_), [c2] "=&r" (c2_) \
+        : [res] "r" (res_), [A] "r" (A_) \
+        : "%rax", "%rdx", "cc", "memory")
+
+/*
+  The Montgomery reduction here is based on Algorithm 14.32 in
+  Handbook of Applied Cryptography
+  <http://cacr.uwaterloo.ca/hac/about/chap14.pdf>.
+ */
+#define REDUCE_6_LIMB_PRODUCT(k_, tmp1_, tmp2_, tmp3_, inv_, res_, mod_) \
+    __asm__ volatile                               \
+        ("///////////////////////////////////\n\t" \
+         "movq   0(%[res]), %%rax            \n\t" \
+         "mulq   %[modprime]                 \n\t" \
+         "movq   %%rax, %[k]                 \n\t" \
+                                                   \
+         "movq   (%[mod]), %%rax             \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "movq   %%rax, %[tmp1]              \n\t" \
+         "movq   %%rdx, %[tmp2]              \n\t" \
+                                                   \
+         "xorq   %[tmp3], %[tmp3]            \n\t" \
+         "movq   8(%[mod]), %%rax            \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "addq   %[tmp1], 0(%[res])          \n\t" \
+         "adcq   %%rax, %[tmp2]              \n\t" \
+         "adcq   %%rdx, %[tmp3]              \n\t" \
+                                                   \
+         "xorq   %[tmp1], %[tmp1]            \n\t" \
+         "movq   16(%[mod]), %%rax           \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "addq   %[tmp2], 8(%[res])          \n\t" \
+         "adcq   %%rax, %[tmp3]              \n\t" \
+         "adcq   %%rdx, %[tmp1]              \n\t" \
+                                                   \
+         "addq
