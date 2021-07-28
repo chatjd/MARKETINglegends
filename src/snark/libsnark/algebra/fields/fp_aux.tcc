@@ -322,4 +322,68 @@ namespace libsnark {
          "adcq   %%rax, %[tmp3]              \n\t" \
          "adcq   %%rdx, %[tmp1]              \n\t" \
                                                    \
-         "addq
+         "addq   %[tmp3], 16(%[res])         \n\t" \
+         "adcq   %[tmp1], 24(%[res])         \n\t" \
+         "adcq   $0, 32(%[res])              \n\t" \
+         "adcq   $0, 40(%[res])              \n\t" \
+                                                   \
+         "///////////////////////////////////\n\t" \
+         "movq   8(%[res]), %%rax            \n\t" \
+         "mulq   %[modprime]                 \n\t" \
+         "movq   %%rax, %[k]                 \n\t" \
+                                                   \
+         "movq   (%[mod]), %%rax             \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "movq   %%rax, %[tmp1]              \n\t" \
+         "movq   %%rdx, %[tmp2]              \n\t" \
+                                                   \
+         "xorq   %[tmp3], %[tmp3]            \n\t" \
+         "movq   8(%[mod]), %%rax            \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "addq   %[tmp1], 8(%[res])          \n\t" \
+         "adcq   %%rax, %[tmp2]              \n\t" \
+         "adcq   %%rdx, %[tmp3]              \n\t" \
+                                                   \
+         "xorq   %[tmp1], %[tmp1]            \n\t" \
+         "movq   16(%[mod]), %%rax           \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "addq   %[tmp2], 16(%[res])         \n\t" \
+         "adcq   %%rax, %[tmp3]              \n\t" \
+         "adcq   %%rdx, %[tmp1]              \n\t" \
+                                                   \
+         "addq   %[tmp3], 24(%[res])         \n\t" \
+         "adcq   %[tmp1], 32(%[res])         \n\t" \
+         "adcq   $0, 40(%[res])              \n\t" \
+                                                   \
+         "///////////////////////////////////\n\t" \
+         "movq   16(%[res]), %%rax           \n\t" \
+         "mulq   %[modprime]                 \n\t" \
+         "movq   %%rax, %[k]                 \n\t" \
+                                                   \
+         "movq   (%[mod]), %%rax             \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "movq   %%rax, %[tmp1]              \n\t" \
+         "movq   %%rdx, %[tmp2]              \n\t" \
+                                                   \
+         "xorq   %[tmp3], %[tmp3]            \n\t" \
+         "movq   8(%[mod]), %%rax            \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "addq   %[tmp1], 16(%[res])         \n\t" \
+         "adcq   %%rax, %[tmp2]              \n\t" \
+         "adcq   %%rdx, %[tmp3]              \n\t" \
+                                                   \
+         "xorq   %[tmp1], %[tmp1]            \n\t" \
+         "movq   16(%[mod]), %%rax           \n\t" \
+         "mulq   %[k]                        \n\t" \
+         "addq   %[tmp2], 24(%[res])         \n\t" \
+         "adcq   %%rax, %[tmp3]              \n\t" \
+         "adcq   %%rdx, %[tmp1]              \n\t" \
+                                                   \
+         "addq   %[tmp3], 32(%[res])         \n\t" \
+         "adcq   %[tmp1], 40(%[res])         \n\t" \
+         : [k] "=&r" (k_), [tmp1] "=&r" (tmp1_), [tmp2] "=&r" (tmp2_), [tmp3] "=&r" (tmp3_) \
+         : [modprime] "r" (inv_), [res] "r" (res_), [mod] "r" (mod_) \
+         : "%rax", "%rdx", "cc", "memory")
+
+} // libsnark
+#endif // FP_AUX_TCC_
