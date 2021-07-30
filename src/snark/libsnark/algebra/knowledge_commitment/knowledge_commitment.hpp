@@ -72,4 +72,13 @@ std::istream& operator>>(std::istream& in, knowledge_commitment<T1,T2> &kc);
 /******************** Knowledge commitment vector ****************************/
 
 /**
- * A knowledge comm
+ * A knowledge commitment vector is a sparse vector of knowledge commitments.
+ */
+template<typename T1, typename T2>
+using knowledge_commitment_vector = sparse_vector<knowledge_commitment<T1, T2> >;
+
+} // libsnark
+
+#include "algebra/knowledge_commitment/knowledge_commitment.tcc"
+
+#endif // KNOWLEDGE_COMMITMENT_HPP_
