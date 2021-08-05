@@ -214,4 +214,194 @@ T multi_exp_inner(typename std::vector<T>::const_iterator vec_start,
         const size_t bbits = b.r.num_bits();
         const size_t limit = (abits-bbits >= 20 ? 20 : abits-bbits);
 
-        if (bbi
+        if (bbits < UINT64_C(1)<<limit)
+        {
+            /*
+              In this case, exponentiating to the power of a is cheaper than
+              subtracting b from a multiple times, so let's do it directly
+            */
+            // opt_result = opt_result + (a.r * g[a.idx]);
+            opt_result = opt_result + opt_window_wnaf_exp(g[a.idx], a.r, abits);
+#ifdef DEBUG
+            printf("Skipping the following pair (%zu bit number vs %zu bit):\n", abits, bbits);
+            a.r.print();
+            b.r.print();
+#endif
+            a.r.clear();
+        }
+        else
+        {
+            // x A + y B => (x-y) A + y (B+A)
+            mpn_sub_n(a.r.data, a.r.data, b.r.data, n);
+            g[b.idx] = g[b.idx] + g[a.idx];
+        }
+
+        // regardless of whether a was cleared or subtracted from we push it down, then take back up
+
+        /* heapify A down */
+        size_t a_pos = 0;
+        while (2*a_pos + 2< odd_vec_len)
+        {
+            // this is a max-heap so to maintain a heap property we swap with the largest of the two
+            if (opt_q[2*a_pos+1] < opt_q[2*a_pos+2])
+            {
+                std::swap(opt_q[a_pos], opt_q[2*a_pos+2]);
+                a_pos = 2*a_pos+2;
+            }
+            else
+            {
+                std::swap(opt_q[a_pos], opt_q[2*a_pos+1]);
+                a_pos = 2*a_pos+1;
+            }
+        }
+
+        /* now heapify A up appropriate amount of times */
+        while (a_pos > 0 && opt_q[(a_pos-1)/2] < opt_q[a_pos])
+        {
+            std::swap(opt_q[a_pos], opt_q[(a_pos-1)/2]);
+            a_pos = (a_pos-1) / 2;
+        }
+    }
+
+    return opt_result;
+}
+
+template<typename T, typename FieldT>
+T multi_exp(typename std::vector<T>::const_iterator vec_start,
+            typename std::vector<T>::const_iterator vec_end,
+            typename std::vector<FieldT>::const_iterator scalar_start,
+            typename std::vector<FieldT>::const_iterator scalar_end,
+            const size_t chunks,
+            const bool use_multiexp)
+{
+    const size_t total = vec_end - vec_start;
+    if (total < chunks)
+    {
+        return naive_exp<T, FieldT>(vec_start, vec_end, scalar_start, scalar_end);
+    }
+
+    const size_t one = total/chunks;
+
+    std::vector<T> partial(chunks, T::zero());
+
+    if (use_multiexp)
+    {
+#ifdef MULTICORE
+#pragma omp parallel for
+#endif
+        for (size_t i = 0; i < chunks; ++i)
+        {
+            partial[i] = multi_exp_inner<T, FieldT>(vec_start + i*one,
+                                                    (i == chunks-1 ? vec_end : vec_start + (i+1)*one),
+                                                    scalar_start + i*one,
+                                                    (i == chunks-1 ? scalar_end : scalar_start + (i+1)*one));
+        }
+    }
+    else
+    {
+#ifdef MULTICORE
+#pragma omp parallel for
+#endif
+        for (size_t i = 0; i < chunks; ++i)
+        {
+            partial[i] = naive_exp<T, FieldT>(vec_start + i*one,
+                                              (i == chunks-1 ? vec_end : vec_start + (i+1)*one),
+                                              scalar_start + i*one,
+                                              (i == chunks-1 ? scalar_end : scalar_start + (i+1)*one));
+        }
+    }
+
+    T final = T::zero();
+
+    for (size_t i = 0; i < chunks; ++i)
+    {
+        final = final + partial[i];
+    }
+
+    return final;
+}
+
+template<typename T, typename FieldT>
+T multi_exp_with_mixed_addition(typename std::vector<T>::const_iterator vec_start,
+                                typename std::vector<T>::const_iterator vec_end,
+                                typename std::vector<FieldT>::const_iterator scalar_start,
+                                typename std::vector<FieldT>::const_iterator scalar_end,
+                                const size_t chunks,
+                                const bool use_multiexp)
+{
+    assert(std::distance(vec_start, vec_end) == std::distance(scalar_start, scalar_end));
+    enter_block("Process scalar vector");
+    auto value_it = vec_start;
+    auto scalar_it = scalar_start;
+
+    const FieldT zero = FieldT::zero();
+    const FieldT one = FieldT::one();
+    std::vector<FieldT> p;
+    std::vector<T> g;
+
+    T acc = T::zero();
+
+    size_t num_skip = 0;
+    size_t num_add = 0;
+    size_t num_other = 0;
+
+    for (; scalar_it != scalar_end; ++scalar_it, ++value_it)
+    {
+        if (*scalar_it == zero)
+        {
+            // do nothing
+            ++num_skip;
+        }
+        else if (*scalar_it == one)
+        {
+#ifdef USE_MIXED_ADDITION
+            acc = acc.mixed_add(*value_it);
+#else
+            acc = acc + (*value_it);
+#endif
+            ++num_add;
+        }
+        else
+        {
+            p.emplace_back(*scalar_it);
+            g.emplace_back(*value_it);
+            ++num_other;
+        }
+    }
+    //print_indent(); printf("* Elements of w skipped: %zu (%0.2f%%)\n", num_skip, 100.*num_skip/(num_skip+num_add+num_other));
+    //print_indent(); printf("* Elements of w processed with special addition: %zu (%0.2f%%)\n", num_add, 100.*num_add/(num_skip+num_add+num_other));
+    //print_indent(); printf("* Elements of w remaining: %zu (%0.2f%%)\n", num_other, 100.*num_other/(num_skip+num_add+num_other));
+
+    leave_block("Process scalar vector");
+
+    return acc + multi_exp<T, FieldT>(g.begin(), g.end(), p.begin(), p.end(), chunks, use_multiexp);
+}
+
+template<typename T>
+size_t get_exp_window_size(const size_t num_scalars)
+{
+    if (T::fixed_base_exp_window_table.empty())
+    {
+#ifdef LOWMEM
+        return 14;
+#else
+        return 17;
+#endif
+    }
+    size_t window = 1;
+    for (int64_t i = T::fixed_base_exp_window_table.size()-1; i >= 0; --i)
+    {
+#ifdef DEBUG
+        if (!inhibit_profiling_info)
+        {
+            printf("%ld %zu %zu\n", i, num_scalars, T::fixed_base_exp_window_table[i]);
+        }
+#endif
+        if (T::fixed_base_exp_window_table[i] != 0 && num_scalars >= T::fixed_base_exp_window_table[i])
+        {
+            window = i+1;
+            break;
+        }
+    }
+
+    if (!inhibit_profiling_i
