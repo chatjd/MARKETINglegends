@@ -404,4 +404,187 @@ size_t get_exp_window_size(const size_t num_scalars)
         }
     }
 
-    if (!inhibit_profiling_i
+    if (!inhibit_profiling_info)
+    {
+        print_indent(); printf("Choosing window size %zu for %zu elements\n", window, num_scalars);
+    }
+
+#ifdef LOWMEM
+    window = std::min((size_t)14, window);
+#endif
+    return window;
+}
+
+template<typename T>
+window_table<T> get_window_table(const size_t scalar_size,
+                                 const size_t window,
+                                 const T &g)
+{
+    const size_t in_window = UINT64_C(1)<<window;
+    const size_t outerc = (scalar_size+window-1)/window;
+    const size_t last_in_window = UINT64_C(1)<<(scalar_size - (outerc-1)*window);
+#ifdef DEBUG
+    if (!inhibit_profiling_info)
+    {
+        print_indent(); printf("* scalar_size=%zu; window=%zu; in_window=%zu; outerc=%zu\n", scalar_size, window, in_window, outerc);
+    }
+#endif
+
+    window_table<T> powers_of_g(outerc, std::vector<T>(in_window, T::zero()));
+
+    T gouter = g;
+
+    for (size_t outer = 0; outer < outerc; ++outer)
+    {
+        T ginner = T::zero();
+        size_t cur_in_window = outer == outerc-1 ? last_in_window : in_window;
+        for (size_t inner = 0; inner < cur_in_window; ++inner)
+        {
+            powers_of_g[outer][inner] = ginner;
+            ginner = ginner + gouter;
+        }
+
+        for (size_t i = 0; i < window; ++i)
+        {
+            gouter = gouter + gouter;
+        }
+    }
+
+    return powers_of_g;
+}
+
+template<typename T, typename FieldT>
+T windowed_exp(const size_t scalar_size,
+               const size_t window,
+               const window_table<T> &powers_of_g,
+               const FieldT &pow)
+{
+    const size_t outerc = (scalar_size+window-1)/window;
+    const bigint<FieldT::num_limbs> pow_val = pow.as_bigint();
+
+    /* exp */
+    T res = powers_of_g[0][0];
+
+    for (size_t outer = 0; outer < outerc; ++outer)
+    {
+        size_t inner = 0;
+        for (size_t i = 0; i < window; ++i)
+        {
+            if (pow_val.test_bit(outer*window + i))
+            {
+                inner |= 1u << i;
+            }
+        }
+
+        res = res + powers_of_g[outer][inner];
+    }
+
+    return res;
+}
+
+template<typename T, typename FieldT>
+std::vector<T> batch_exp(const size_t scalar_size,
+                         const size_t window,
+                         const window_table<T> &table,
+                         const std::vector<FieldT> &v)
+{
+    if (!inhibit_profiling_info)
+    {
+        print_indent();
+    }
+    std::vector<T> res(v.size(), table[0][0]);
+
+#ifdef MULTICORE
+#pragma omp parallel for
+#endif
+    for (size_t i = 0; i < v.size(); ++i)
+    {
+        res[i] = windowed_exp(scalar_size, window, table, v[i]);
+
+        if (!inhibit_profiling_info && (i % 10000 == 0))
+        {
+            printf(".");
+            fflush(stdout);
+        }
+    }
+
+    if (!inhibit_profiling_info)
+    {
+        printf(" DONE!\n");
+    }
+
+    return res;
+}
+
+template<typename T, typename FieldT>
+std::vector<T> batch_exp_with_coeff(const size_t scalar_size,
+                                    const size_t window,
+                                    const window_table<T> &table,
+                                    const FieldT &coeff,
+                                    const std::vector<FieldT> &v)
+{
+    if (!inhibit_profiling_info)
+    {
+        print_indent();
+    }
+    std::vector<T> res(v.size(), table[0][0]);
+
+#ifdef MULTICORE
+#pragma omp parallel for
+#endif
+    for (size_t i = 0; i < v.size(); ++i)
+    {
+        res[i] = windowed_exp(scalar_size, window, table, coeff * v[i]);
+
+        if (!inhibit_profiling_info && (i % 10000 == 0))
+        {
+            printf(".");
+            fflush(stdout);
+        }
+    }
+
+    if (!inhibit_profiling_info)
+    {
+        printf(" DONE!\n");
+    }
+
+    return res;
+}
+
+template<typename T>
+void batch_to_special(std::vector<T> &vec)
+{
+    enter_block("Batch-convert elements to special form");
+
+    std::vector<T> non_zero_vec;
+    for (size_t i = 0; i < vec.size(); ++i)
+    {
+        if (!vec[i].is_zero())
+        {
+            non_zero_vec.emplace_back(vec[i]);
+        }
+    }
+
+    batch_to_special_all_non_zeros<T>(non_zero_vec);
+    auto it = non_zero_vec.begin();
+    T zero_special = T::zero();
+    zero_special.to_special();
+
+    for (size_t i = 0; i < vec.size(); ++i)
+    {
+        if (!vec[i].is_zero())
+        {
+            vec[i] = *it;
+            ++it;
+        }
+        else
+        {
+            vec[i] = zero_special;
+        }
+    }
+    leave_block("Batch-convert elements to special form");
+}
+
+} // libsnark
+
+#endif // MULTIEXP_TCC_
