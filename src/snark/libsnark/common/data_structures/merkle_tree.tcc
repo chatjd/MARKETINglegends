@@ -215,4 +215,32 @@ typename HashT::merkle_authentication_path_type merkle_tree<HashT>::get_path(con
         }
         else
         {
-            result[layer-1] = (it == hashes
+            result[layer-1] = (it == hashes.end() ? hash_defaults[layer] : it->second);
+        }
+
+        idx = (idx-1)/2;
+    }
+
+    return result;
+}
+
+template<typename HashT>
+void merkle_tree<HashT>::dump() const
+{
+    for (size_t i = 0; i < UINT64_C(1)<<depth; ++i)
+    {
+        auto it = values.find(i);
+        printf("[%zu] -> ", i);
+        const bit_vector value = (it == values.end() ? bit_vector(value_size) : it->second);
+        for (bool b : value)
+        {
+            printf("%d", b ? 1 : 0);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+} // libsnark
+
+#endif // MERKLE_TREE_TCC
