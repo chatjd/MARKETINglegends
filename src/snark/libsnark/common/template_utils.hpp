@@ -1,8 +1,7 @@
 /** @file
  *****************************************************************************
 
- This file defines default_r1cs_ppzksnark_pp based on the elliptic curve
- choice selected in ec_pp.hpp.
+ Declaration of functions for supporting the use of templates.
 
  *****************************************************************************
  * @author     This file is part of libsnark, developed by SCIPR Lab
@@ -10,13 +9,11 @@
  * @copyright  MIT license (see LICENSE file)
  *****************************************************************************/
 
-#ifndef R1CS_PPZKSNARK_PP_HPP_
-#define R1CS_PPZKSNARK_PP_HPP_
-
-#include "common/default_types/ec_pp.hpp"
+#ifndef TEMPLATE_UTILS_HPP_
+#define TEMPLATE_UTILS_HPP_
 
 namespace libsnark {
-typedef default_ec_pp default_r1cs_ppzksnark_pp;
-} // libsnark
 
-#endif // R1CS_PPZKSNARK_PP_HPP_
+/* A commonly used SFINAE helper type */
+template<typename T>
+struct vo
