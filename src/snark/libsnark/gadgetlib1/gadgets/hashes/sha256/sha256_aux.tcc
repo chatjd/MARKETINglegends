@@ -85,4 +85,157 @@ void XOR3_gadget<FieldT>::generate_r1cs_constraints()
     */
     if (assume_C_is_zero)
     {
-        
+        this->pb.add_r1cs_constraint(r1cs_constraint<FieldT>(2*A, B, A + B - out), FMT(this->annotation_prefix, " implicit_tmp_equals_out"));
+    }
+    else
+    {
+        this->pb.add_r1cs_constraint(r1cs_constraint<FieldT>(2*A, B, A + B - tmp), FMT(this->annotation_prefix, " tmp"));
+        this->pb.add_r1cs_constraint(r1cs_constraint<FieldT>(2 * tmp, C, tmp + C - out), FMT(this->annotation_prefix, " out"));
+    }
+}
+
+template<typename FieldT>
+void XOR3_gadget<FieldT>::generate_r1cs_witness()
+{
+    if (assume_C_is_zero)
+    {
+        this->pb.lc_val(out) = this->pb.lc_val(A) + this->pb.lc_val(B) - FieldT(2) * this->pb.lc_val(A) * this->pb.lc_val(B);
+    }
+    else
+    {
+        this->pb.val(tmp) = this->pb.lc_val(A) + this->pb.lc_val(B) - FieldT(2) * this->pb.lc_val(A) * this->pb.lc_val(B);
+        this->pb.lc_val(out) = this->pb.val(tmp) + this->pb.lc_val(C) - FieldT(2) * this->pb.val(tmp) * this->pb.lc_val(C);
+    }
+}
+
+#define SHA256_GADGET_ROTR(A, i, k) A[((i)+(k)) % 32]
+
+/* Page 10 of http://csrc.nist.gov/publications/fips/fips180-4/fips-180-4.pdf */
+template<typename FieldT>
+small_sigma_gadget<FieldT>::small_sigma_gadget(protoboard<FieldT> &pb,
+                                               const pb_variable_array<FieldT> &W,
+                                               const pb_variable<FieldT> &result,
+                                               const size_t rot1,
+                                               const size_t rot2,
+                                               const size_t shift,
+                                               const std::string &annotation_prefix) :
+    gadget<FieldT>(pb, annotation_prefix),
+    W(W),
+    result(result)
+{
+    result_bits.allocate(pb, 32, FMT(this->annotation_prefix, " result_bits"));
+    compute_bits.resize(32);
+    for (size_t i = 0; i < 32; ++i)
+    {
+        compute_bits[i].reset(new XOR3_gadget<FieldT>(pb, SHA256_GADGET_ROTR(W, i, rot1), SHA256_GADGET_ROTR(W, i, rot2),
+                                              (i + shift < 32 ? W[i+shift] : ONE),
+                                              (i + shift >= 32), result_bits[i],
+                                              FMT(this->annotation_prefix, " compute_bits_%zu", i)));
+    }
+    pack_result.reset(new packing_gadget<FieldT>(pb, result_bits, result, FMT(this->annotation_prefix, " pack_result")));
+}
+
+template<typename FieldT>
+void small_sigma_gadget<FieldT>::generate_r1cs_constraints()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        compute_bits[i]->generate_r1cs_constraints();
+    }
+
+    pack_result->generate_r1cs_constraints(false);
+}
+
+template<typename FieldT>
+void small_sigma_gadget<FieldT>::generate_r1cs_witness()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        compute_bits[i]->generate_r1cs_witness();
+    }
+
+    pack_result->generate_r1cs_witness_from_bits();
+}
+
+template<typename FieldT>
+big_sigma_gadget<FieldT>::big_sigma_gadget(protoboard<FieldT> &pb,
+                                           const pb_linear_combination_array<FieldT> &W,
+                                           const pb_variable<FieldT> &result,
+                                           const size_t rot1,
+                                           const size_t rot2,
+                                           const size_t rot3,
+                                           const std::string &annotation_prefix) :
+    gadget<FieldT>(pb, annotation_prefix),
+    W(W),
+    result(result)
+{
+    result_bits.allocate(pb, 32, FMT(this->annotation_prefix, " result_bits"));
+    compute_bits.resize(32);
+    for (size_t i = 0; i < 32; ++i)
+    {
+        compute_bits[i].reset(new XOR3_gadget<FieldT>(pb, SHA256_GADGET_ROTR(W, i, rot1), SHA256_GADGET_ROTR(W, i, rot2), SHA256_GADGET_ROTR(W, i, rot3), false, result_bits[i],
+                                                      FMT(this->annotation_prefix, " compute_bits_%zu", i)));
+    }
+
+    pack_result.reset(new packing_gadget<FieldT>(pb, result_bits, result, FMT(this->annotation_prefix, " pack_result")));
+}
+
+template<typename FieldT>
+void big_sigma_gadget<FieldT>::generate_r1cs_constraints()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        compute_bits[i]->generate_r1cs_constraints();
+    }
+
+    pack_result->generate_r1cs_constraints(false);
+}
+
+template<typename FieldT>
+void big_sigma_gadget<FieldT>::generate_r1cs_witness()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        compute_bits[i]->generate_r1cs_witness();
+    }
+
+    pack_result->generate_r1cs_witness_from_bits();
+}
+
+/* Page 10 of http://csrc.nist.gov/publications/fips/fips180-4/fips-180-4.pdf */
+template<typename FieldT>
+choice_gadget<FieldT>::choice_gadget(protoboard<FieldT> &pb,
+                                     const pb_linear_combination_array<FieldT> &X,
+                                     const pb_linear_combination_array<FieldT> &Y,
+                                     const pb_linear_combination_array<FieldT> &Z,
+                                     const pb_variable<FieldT> &result, const std::string &annotation_prefix) :
+    gadget<FieldT>(pb, annotation_prefix),
+    X(X),
+    Y(Y),
+    Z(Z),
+    result(result)
+{
+    result_bits.allocate(pb, 32, FMT(this->annotation_prefix, " result_bits"));
+    pack_result.reset(new packing_gadget<FieldT>(pb, result_bits, result, FMT(this->annotation_prefix, " result")));
+}
+
+template<typename FieldT>
+void choice_gadget<FieldT>::generate_r1cs_constraints()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        /*
+          result = x * y + (1-x) * z
+          result - z = x * (y - z)
+        */
+        this->pb.add_r1cs_constraint(r1cs_constraint<FieldT>(X[i], Y[i] - Z[i], result_bits[i] - Z[i]), FMT(this->annotation_prefix, " result_bits_%zu", i));
+    }
+    pack_result->generate_r1cs_constraints(false);
+}
+
+template<typename FieldT>
+void choice_gadget<FieldT>::generate_r1cs_witness()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        this->pb.val(result_bits[i]) = this->pb.lc_val(X[i]) * this->pb.lc_val(Y[i]) + (FieldT::one(
