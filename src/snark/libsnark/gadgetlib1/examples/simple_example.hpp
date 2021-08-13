@@ -1,26 +1,23 @@
 /** @file
  *****************************************************************************
-
- Declaration of functions for supporting the use of templates.
-
- *****************************************************************************
  * @author     This file is part of libsnark, developed by SCIPR Lab
  *             and contributors (see AUTHORS).
  * @copyright  MIT license (see LICENSE file)
  *****************************************************************************/
 
-#ifndef TEMPLATE_UTILS_HPP_
-#define TEMPLATE_UTILS_HPP_
+#ifndef SIMPLE_EXAMPLE_HPP_
+#define SIMPLE_EXAMPLE_HPP_
+
+#include "examples/r1cs_examples.hpp"
 
 namespace libsnark {
 
-/* A commonly used SFINAE helper type */
-template<typename T>
-struct void_type
-{
-    typedef void type;
-};
+template<typename FieldT>
+r1cs_example<FieldT> gen_r1cs_example_from_protoboard(const size_t num_constraints,
+                                                      const size_t num_inputs);
 
 } // libsnark
 
-#endif // TEMPLATE_UTILS_HPP_
+#include "gadgetlib1/examples/simple_example.tcc"
+
+#endif // SIMPLE_EXAMPLE_HPP_

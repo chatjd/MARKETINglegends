@@ -1,26 +1,23 @@
 /** @file
  *****************************************************************************
-
- Declaration of functions for supporting the use of templates.
-
+ Implementation of templatized utility functions
  *****************************************************************************
  * @author     This file is part of libsnark, developed by SCIPR Lab
  *             and contributors (see AUTHORS).
  * @copyright  MIT license (see LICENSE file)
  *****************************************************************************/
 
-#ifndef TEMPLATE_UTILS_HPP_
-#define TEMPLATE_UTILS_HPP_
+#ifndef UTILS_TCC_
+#define UTILS_TCC_
 
 namespace libsnark {
 
-/* A commonly used SFINAE helper type */
 template<typename T>
-struct void_type
+size_t size_in_bits(const std::vector<T> &v)
 {
-    typedef void type;
-};
+    return v.size() * T::size_in_bits();
+}
 
 } // libsnark
 
-#endif // TEMPLATE_UTILS_HPP_
+#endif // UTILS_TCC_
