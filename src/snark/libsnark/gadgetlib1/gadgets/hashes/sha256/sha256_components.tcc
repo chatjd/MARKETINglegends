@@ -212,4 +212,39 @@ void sha256_round_function_gadget<FieldT>::generate_r1cs_constraints()
     pack_d->generate_r1cs_constraints(false);
     pack_h->generate_r1cs_constraints(false);
 
-    t
+    this->pb.add_r1cs_constraint(r1cs_constraint<FieldT>(1,
+                                                         packed_h + sigma1 + choice + K + W + sigma0 + majority,
+                                                         unreduced_new_a),
+        FMT(this->annotation_prefix, " unreduced_new_a"));
+
+    this->pb.add_r1cs_constraint(r1cs_constraint<FieldT>(1,
+                                                         packed_d + packed_h + sigma1 + choice + K + W,
+                                                         unreduced_new_e),
+        FMT(this->annotation_prefix, " unreduced_new_e"));
+
+    mod_reduce_new_a->generate_r1cs_constraints();
+    mod_reduce_new_e->generate_r1cs_constraints();
+}
+
+template<typename FieldT>
+void sha256_round_function_gadget<FieldT>::generate_r1cs_witness()
+{
+    compute_sigma0->generate_r1cs_witness();
+    compute_sigma1->generate_r1cs_witness();
+
+    compute_choice->generate_r1cs_witness();
+    compute_majority->generate_r1cs_witness();
+
+    pack_d->generate_r1cs_witness_from_bits();
+    pack_h->generate_r1cs_witness_from_bits();
+
+    this->pb.val(unreduced_new_a) = this->pb.val(packed_h) + this->pb.val(sigma1) + this->pb.val(choice) + FieldT(K) + this->pb.val(W) + this->pb.val(sigma0) + this->pb.val(majority);
+    this->pb.val(unreduced_new_e) = this->pb.val(packed_d) + this->pb.val(packed_h) + this->pb.val(sigma1) + this->pb.val(choice) + FieldT(K) + this->pb.val(W);
+
+    mod_reduce_new_a->generate_r1cs_witness();
+    mod_reduce_new_e->generate_r1cs_witness();
+}
+
+} // libsnark
+
+#endif // SHA256_COMPONENTS_TCC_
