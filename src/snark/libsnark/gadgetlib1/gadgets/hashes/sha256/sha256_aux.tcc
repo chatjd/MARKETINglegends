@@ -238,4 +238,60 @@ void choice_gadget<FieldT>::generate_r1cs_witness()
 {
     for (size_t i = 0; i < 32; ++i)
     {
-        this->pb.val(result_bits[i]) = this->pb.lc_val(X[i]) * this->pb.lc_val(Y[i]) + (FieldT::one(
+        this->pb.val(result_bits[i]) = this->pb.lc_val(X[i]) * this->pb.lc_val(Y[i]) + (FieldT::one() - this->pb.lc_val(X[i])) * this->pb.lc_val(Z[i]);
+    }
+    pack_result->generate_r1cs_witness_from_bits();
+}
+
+/* Page 10 of http://csrc.nist.gov/publications/fips/fips180-4/fips-180-4.pdf */
+template<typename FieldT>
+majority_gadget<FieldT>::majority_gadget(protoboard<FieldT> &pb,
+                                         const pb_linear_combination_array<FieldT> &X,
+                                         const pb_linear_combination_array<FieldT> &Y,
+                                         const pb_linear_combination_array<FieldT> &Z,
+                                         const pb_variable<FieldT> &result,
+                                         const std::string &annotation_prefix) :
+    gadget<FieldT>(pb, annotation_prefix),
+    X(X),
+    Y(Y),
+    Z(Z),
+    result(result)
+{
+    result_bits.allocate(pb, 32, FMT(this->annotation_prefix, " result_bits"));
+    pack_result.reset(new packing_gadget<FieldT>(pb, result_bits, result, FMT(this->annotation_prefix, " result")));
+}
+
+template<typename FieldT>
+void majority_gadget<FieldT>::generate_r1cs_constraints()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        /*
+          2*result + aux = x + y + z
+          x, y, z, aux -- bits
+          aux = x + y + z - 2*result
+        */
+        generate_boolean_r1cs_constraint<FieldT>(this->pb, result_bits[i], FMT(this->annotation_prefix, " result_%zu", i));
+        this->pb.add_r1cs_constraint(r1cs_constraint<FieldT>(X[i] + Y[i] + Z[i] - 2 * result_bits[i],
+                                                             1 - (X[i] + Y[i] + Z[i] -  2 * result_bits[i]),
+                                                             0),
+                                     FMT(this->annotation_prefix, " result_bits_%zu", i));
+    }
+    pack_result->generate_r1cs_constraints(false);
+}
+
+template<typename FieldT>
+void majority_gadget<FieldT>::generate_r1cs_witness()
+{
+    for (size_t i = 0; i < 32; ++i)
+    {
+        const uint64_t v = (this->pb.lc_val(X[i]) + this->pb.lc_val(Y[i]) + this->pb.lc_val(Z[i])).as_uint64();
+        this->pb.val(result_bits[i]) = FieldT(v / 2);
+    }
+
+    pack_result->generate_r1cs_witness_from_bits();
+}
+
+} // libsnark
+
+#endif // SHA256_AUX_TCC_
