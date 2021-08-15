@@ -301,3 +301,39 @@ qap_witness<FieldT> r1cs_to_qap_witness_map(const r1cs_constraint_system<FieldT>
     {
         H_tmp[i] = (H_tmp[i]-aC[i]);
     }
+
+    enter_block("Divide by Z on set T");
+    domain->divide_by_Z_on_coset(H_tmp);
+    leave_block("Divide by Z on set T");
+
+    leave_block("Compute evaluation of polynomial H on set T");
+
+    enter_block("Compute coefficients of polynomial H");
+    domain->icosetFFT(H_tmp, FieldT::multiplicative_generator);
+    leave_block("Compute coefficients of polynomial H");
+
+    enter_block("Compute sum of H and ZK-patch");
+#ifdef MULTICORE
+#pragma omp parallel for
+#endif
+    for (size_t i = 0; i < domain->m; ++i)
+    {
+        coefficients_for_H[i] += H_tmp[i];
+    }
+    leave_block("Compute sum of H and ZK-patch");
+
+    leave_block("Call to r1cs_to_qap_witness_map");
+
+    return qap_witness<FieldT>(cs.num_variables(),
+                               domain->m,
+                               cs.num_inputs(),
+                               d1,
+                               d2,
+                               d3,
+                               full_variable_assignment,
+                               std::move(coefficients_for_H));
+}
+
+} // libsnark
+
+#endif // R1CS_TO_QAP_TCC_
