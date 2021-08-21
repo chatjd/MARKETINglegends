@@ -423,4 +423,90 @@ std::ostream& operator<<(std::ostream &out, const linear_combination<FieldT> &lc
 template<typename FieldT>
 std::istream& operator>>(std::istream &in, linear_combination<FieldT> &lc)
 {
-    lc.terms.clear(
+    lc.terms.clear();
+
+    size_t s;
+    in >> s;
+
+    consume_newline(in);
+
+    lc.terms.reserve(s);
+
+    for (size_t i = 0; i < s; ++i)
+    {
+        linear_term<FieldT> lt;
+        in >> lt.index;
+        consume_newline(in);
+        in >> lt.coeff;
+        consume_OUTPUT_NEWLINE(in);
+        lc.terms.emplace_back(lt);
+    }
+
+    return in;
+}
+
+template<typename FieldT>
+linear_combination<FieldT> operator*(const integer_coeff_t int_coeff, const linear_combination<FieldT> &lc)
+{
+    return lc * int_coeff;
+}
+
+template<typename FieldT>
+linear_combination<FieldT> operator*(const FieldT &field_coeff, const linear_combination<FieldT> &lc)
+{
+    return lc * field_coeff;
+}
+
+template<typename FieldT>
+linear_combination<FieldT> operator+(const integer_coeff_t int_coeff, const linear_combination<FieldT> &lc)
+{
+    return linear_combination<FieldT>(int_coeff) + lc;
+}
+
+template<typename FieldT>
+linear_combination<FieldT> operator+(const FieldT &field_coeff, const linear_combination<FieldT> &lc)
+{
+    return linear_combination<FieldT>(field_coeff) + lc;
+}
+
+template<typename FieldT>
+linear_combination<FieldT> operator-(const integer_coeff_t int_coeff, const linear_combination<FieldT> &lc)
+{
+    return linear_combination<FieldT>(int_coeff) - lc;
+}
+
+template<typename FieldT>
+linear_combination<FieldT> operator-(const FieldT &field_coeff, const linear_combination<FieldT> &lc)
+{
+    return linear_combination<FieldT>(field_coeff) - lc;
+}
+
+template<typename FieldT>
+linear_combination<FieldT>::linear_combination(const std::vector<linear_term<FieldT> > &all_terms)
+{
+    if (all_terms.empty())
+    {
+        return;
+    }
+
+    terms = all_terms;
+    std::sort(terms.begin(), terms.end(), [](linear_term<FieldT> a, linear_term<FieldT> b) { return a.index < b.index; });
+
+    auto result_it = terms.begin();
+    for (auto it = ++terms.begin(); it != terms.end(); ++it)
+    {
+        if (it->index == result_it->index)
+        {
+            result_it->coeff += it->coeff;
+        }
+        else
+        {
+            *(++result_it) = *it;
+        }
+    }
+    terms.resize((result_it - terms.begin()) + 1);
+}
+
+} // libsnark
+
+#endif // VARIABLE_TCC
