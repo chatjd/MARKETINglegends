@@ -295,4 +295,210 @@ public:
             return;
         }
         memcpy(pch, &vch[nReadPos], nSize);
- 
+        nReadPos = nReadPosNext;
+    }
+
+    void ignore(int nSize)
+    {
+        // Ignore from the beginning of the buffer
+        if (nSize < 0) {
+            throw std::ios_base::failure("CDataStream::ignore(): nSize negative");
+        }
+        unsigned int nReadPosNext = nReadPos + nSize;
+        if (nReadPosNext >= vch.size())
+        {
+            if (nReadPosNext > vch.size())
+                throw std::ios_base::failure("CBaseDataStream::ignore(): end of data");
+            nReadPos = 0;
+            vch.clear();
+            return;
+        }
+        nReadPos = nReadPosNext;
+    }
+
+    void write(const char* pch, size_t nSize)
+    {
+        // Write to the end of the buffer
+        vch.insert(vch.end(), pch, pch + nSize);
+    }
+
+    template<typename Stream>
+    void Serialize(Stream& s) const
+    {
+        // Special case: stream << stream concatenates like stream += stream
+        if (!vch.empty())
+            s.write((char*)&vch[0], vch.size() * sizeof(vch[0]));
+    }
+
+    template<typename T>
+    CBaseDataStream& operator<<(const T& obj)
+    {
+        // Serialize to this stream
+        ::Serialize(*this, obj);
+        return (*this);
+    }
+
+    template<typename T>
+    CBaseDataStream& operator>>(T& obj)
+    {
+        // Unserialize from this stream
+        ::Unserialize(*this, obj);
+        return (*this);
+    }
+
+    void GetAndClear(CSerializeData &d) {
+        d.insert(d.end(), begin(), end());
+        clear();
+    }
+};
+
+class CDataStream : public CBaseDataStream<CSerializeData>
+{
+public:
+    explicit CDataStream(int nTypeIn, int nVersionIn) : CBaseDataStream(nTypeIn, nVersionIn) { }
+
+    CDataStream(const_iterator pbegin, const_iterator pend, int nTypeIn, int nVersionIn) :
+            CBaseDataStream(pbegin, pend, nTypeIn, nVersionIn) { }
+
+#if !defined(_MSC_VER) || _MSC_VER >= 1300
+    CDataStream(const char* pbegin, const char* pend, int nTypeIn, int nVersionIn) :
+            CBaseDataStream(pbegin, pend, nTypeIn, nVersionIn) { }
+#endif
+
+    CDataStream(const vector_type& vchIn, int nTypeIn, int nVersionIn) :
+            CBaseDataStream(vchIn, nTypeIn, nVersionIn) { }
+
+    CDataStream(const std::vector<char>& vchIn, int nTypeIn, int nVersionIn) :
+            CBaseDataStream(vchIn, nTypeIn, nVersionIn) { }
+
+    CDataStream(const std::vector<unsigned char>& vchIn, int nTypeIn, int nVersionIn) :
+            CBaseDataStream(vchIn, nTypeIn, nVersionIn) { }
+
+    template <typename... Args>
+    CDataStream(int nTypeIn, int nVersionIn, Args&&... args) :
+            CBaseDataStream(nTypeIn, nVersionIn, args...) { }
+
+};
+
+
+
+
+
+
+
+
+
+
+/** Non-refcounted RAII wrapper for FILE*
+ *
+ * Will automatically close the file when it goes out of scope if not null.
+ * If you're returning the file pointer, return file.release().
+ * If you need to close the file early, use file.fclose() instead of fclose(file).
+ */
+class CAutoFile
+{
+private:
+    // Disallow copies
+    CAutoFile(const CAutoFile&);
+    CAutoFile& operator=(const CAutoFile&);
+
+    const int nType;
+    const int nVersion;
+
+    FILE* file;	
+
+public:
+    CAutoFile(FILE* filenew, int nTypeIn, int nVersionIn) : nType(nTypeIn), nVersion(nVersionIn)
+    {
+        file = filenew;
+    }
+
+    ~CAutoFile()
+    {
+        fclose();
+    }
+
+    void fclose()
+    {
+        if (file) {
+            ::fclose(file);
+            file = NULL;
+        }
+    }
+
+    /** Get wrapped FILE* with transfer of ownership.
+     * @note This will invalidate the CAutoFile object, and makes it the responsibility of the caller
+     * of this function to clean up the returned FILE*.
+     */
+    FILE* release()             { FILE* ret = file; file = NULL; return ret; }
+
+    /** Get wrapped FILE* without transfer of ownership.
+     * @note Ownership of the FILE* will remain with this class. Use this only if the scope of the
+     * CAutoFile outlives use of the passed pointer.
+     */
+    FILE* Get() const           { return file; }
+
+    /** Return true if the wrapped FILE* is NULL, false otherwise.
+     */
+    bool IsNull() const         { return (file == NULL); }
+
+    //
+    // Stream subset
+    //
+    int GetType() const          { return nType; }
+    int GetVersion() const       { return nVersion; }
+
+    void read(char* pch, size_t nSize)
+    {
+        if (!file)
+            throw std::ios_base::failure("CAutoFile::read: file handle is NULL");
+        if (fread(pch, 1, nSize, file) != nSize)
+            throw std::ios_base::failure(feof(file) ? "CAutoFile::read: end of file" : "CAutoFile::read: fread failed");
+    }
+
+    void ignore(size_t nSize)
+    {
+        if (!file)
+            throw std::ios_base::failure("CAutoFile::ignore: file handle is NULL");
+        unsigned char data[4096];
+        while (nSize > 0) {
+            size_t nNow = std::min<size_t>(nSize, sizeof(data));
+            if (fread(data, 1, nNow, file) != nNow)
+                throw std::ios_base::failure(feof(file) ? "CAutoFile::ignore: end of file" : "CAutoFile::read: fread failed");
+            nSize -= nNow;
+        }
+    }
+
+    void write(const char* pch, size_t nSize)
+    {
+        if (!file)
+            throw std::ios_base::failure("CAutoFile::write: file handle is NULL");
+        if (fwrite(pch, 1, nSize, file) != nSize)
+            throw std::ios_base::failure("CAutoFile::write: write failed");
+    }
+
+    template<typename T>
+    CAutoFile& operator<<(const T& obj)
+    {
+        // Serialize to this stream
+        if (!file)
+            throw std::ios_base::failure("CAutoFile::operator<<: file handle is NULL");
+        ::Serialize(*this, obj);
+        return (*this);
+    }
+
+    template<typename T>
+    CAutoFile& operator>>(T& obj)
+    {
+        // Unserialize from this stream
+        if (!file)
+            throw std::ios_base::failure("CAutoFile::operator>>: file handle is NULL");
+        ::Unserialize(*this, obj);
+        return (*this);
+    }
+};
+
+/** Non-refcounted RAII wrapper around a FILE* that implements a ring buffer to
+ *  deserialize from. It guarantees the ability to rewind a given number of bytes.
+ *
+ *  Will automatically close the file when it goes ou
