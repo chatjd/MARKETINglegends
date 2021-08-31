@@ -106,4 +106,171 @@ void ProcessMessageSwiftTX(CNode* pfrom, std::string& strCommand, CDataStream& v
             }
 
             // resolve conflicts
-            std::map<uint256, CTransactionLock>::iterator i = mapTxLocks.find(tx.GetHash()
+            std::map<uint256, CTransactionLock>::iterator i = mapTxLocks.find(tx.GetHash());
+            if (i != mapTxLocks.end()) {
+                //we only care if we have a complete tx lock
+                if ((*i).second.CountSignatures() >= SWIFTTX_SIGNATURES_REQUIRED) {
+                    if (!CheckForConflictingLocks(tx)) {
+                        LogPrintf("ProcessMessageSwiftTX::ix - Found Existing Complete IX Lock\n");
+
+                        //reprocess the last 15 blocks
+                        ReprocessBlocks(15);
+                        mapTxLockReq.insert(make_pair(tx.GetHash(), tx));
+                    }
+                }
+            }
+
+            return;
+        }
+    } else if (strCommand == "txlvote") // SwiftX Lock Consensus Votes
+    {
+        CConsensusVote ctx;
+        vRecv >> ctx;
+
+        CInv inv(MSG_TXLOCK_VOTE, ctx.GetHash());
+        pfrom->AddInventoryKnown(inv);
+
+        if (mapTxLockVote.count(ctx.GetHash())) {
+            return;
+        }
+
+        mapTxLockVote.insert(make_pair(ctx.GetHash(), ctx));
+
+        if (ProcessConsensusVote(pfrom, ctx)) {
+            //Spam/Dos protection
+            /*
+                Masternodes will sometimes propagate votes before the transaction is known to the client.
+                This tracks those messages and allows it at the same rate of the rest of the network, if
+                a peer violates it, it will simply be ignored
+            */
+            if (!mapTxLockReq.count(ctx.txHash) && !mapTxLockReqRejected.count(ctx.txHash)) {
+                if (!mapUnknownVotes.count(ctx.vinMasternode.prevout.hash)) {
+                    mapUnknownVotes[ctx.vinMasternode.prevout.hash] = GetTime() + (60 * 10);
+                }
+
+                if (mapUnknownVotes[ctx.vinMasternode.prevout.hash] > GetTime() &&
+                    mapUnknownVotes[ctx.vinMasternode.prevout.hash] - GetAverageVoteTime() > 60 * 10) {
+                    LogPrintf("ProcessMessageSwiftTX::ix - masternode is spamming transaction votes: %s %s\n",
+                        ctx.vinMasternode.ToString().c_str(),
+                        ctx.txHash.ToString().c_str());
+                    return;
+                } else {
+                    mapUnknownVotes[ctx.vinMasternode.prevout.hash] = GetTime() + (60 * 10);
+                }
+            }
+            RelayInv(inv);
+        }
+
+        return;
+    }
+}
+
+bool IsIXTXValid(const CTransaction& txCollateral)
+{
+    if (txCollateral.vout.size() < 1) return false;
+    if (txCollateral.nLockTime != 0) return false;
+
+    CAmount nValueIn = 0;
+    CAmount nValueOut = 0;
+    bool missingTx = false;
+
+    BOOST_FOREACH (const CTxOut o, txCollateral.vout)
+        nValueOut += o.nValue;
+
+    BOOST_FOREACH (const CTxIn i, txCollateral.vin) {
+        CTransaction tx2;
+        uint256 hash;
+        if (GetTransaction(i.prevout.hash, tx2, hash, true)) {
+            if (tx2.vout.size() > i.prevout.n) {
+                nValueIn += tx2.vout[i.prevout.n].nValue;
+            }
+        } else {
+            missingTx = true;
+        }
+    }
+
+    if (nValueOut > GetSporkValue(SPORK_5_MAX_VALUE) * COIN) {
+        LogPrint("swiftx", "IsIXTXValid - Transaction value too high - %s\n", txCollateral.ToString().c_str());
+        return false;
+    }
+
+    if (missingTx) {
+        LogPrint("swiftx", "IsIXTXValid - Unknown inputs in IX transaction - %s\n", txCollateral.ToString().c_str());
+        /*
+            This happens sometimes for an unknown reason, so we'll return that it's a valid transaction.
+            If someone submits an invalid transaction it will be rejected by the network anyway and this isn't
+            very common, but we don't want to block IX just because the client can't figure out the fee.
+        */
+        return true;
+    }
+
+    if (nValueIn - nValueOut < COIN * 0.01) {
+        LogPrint("swiftx", "IsIXTXValid - did not include enough fees in transaction %d\n%s\n", nValueOut - nValueIn, txCollateral.ToString().c_str());
+        return false;
+    }
+
+    return true;
+}
+
+int64_t CreateNewLock(CTransaction tx)
+{
+    int64_t nTxAge = 0;
+    BOOST_REVERSE_FOREACH (CTxIn i, tx.vin) {
+        nTxAge = GetInputAge(i);
+        if (nTxAge < 5) //1 less than the "send IX" gui requires, incase of a block propagating the network at the time
+        {
+            LogPrintf("CreateNewLock - Transaction not found / too new: %d / %s\n", nTxAge, tx.GetHash().ToString().c_str());
+            return 0;
+        }
+    }
+
+    /*
+        Use a blockheight newer than the input.
+        This prevents attackers from using transaction mallibility to predict which masternodes
+        they'll use.
+    */
+    int nBlockHeight = (chainActive.Tip()->nHeight - nTxAge) + 4;
+
+    if (!mapTxLocks.count(tx.GetHash())) {
+        LogPrintf("CreateNewLock - New Transaction Lock %s !\n", tx.GetHash().ToString().c_str());
+
+        CTransactionLock newLock;
+        newLock.nBlockHeight = nBlockHeight;
+        newLock.nExpiration = GetTime() + (60 * 60); //locks expire after 60 minutes (24 confirmations)
+        newLock.nTimeout = GetTime() + (60 * 5);
+        newLock.txHash = tx.GetHash();
+        mapTxLocks.insert(make_pair(tx.GetHash(), newLock));
+    } else {
+        mapTxLocks[tx.GetHash()].nBlockHeight = nBlockHeight;
+        LogPrint("swiftx", "CreateNewLock - Transaction Lock Exists %s !\n", tx.GetHash().ToString().c_str());
+    }
+
+
+    return nBlockHeight;
+}
+
+// check if we need to vote on this transaction
+void DoConsensusVote(CTransaction& tx, int64_t nBlockHeight)
+{
+    if (!fMasterNode) return;
+
+    int n = mnodeman.GetMasternodeRank(activeMasternode.vin, nBlockHeight, MIN_SWIFTTX_PROTO_VERSION);
+
+    if (n == -1) {
+        LogPrint("swiftx", "SwiftX::DoConsensusVote - Unknown Masternode\n");
+        return;
+    }
+
+    if (n > SWIFTTX_SIGNATURES_TOTAL) {
+        LogPrint("swiftx", "SwiftX::DoConsensusVote - Masternode not in the top %d (%d)\n", SWIFTTX_SIGNATURES_TOTAL, n);
+        return;
+    }
+    /*
+        nBlockHeight calculated from the transaction is the authoritive source
+    */
+
+    LogPrint("swiftx", "SwiftX::DoConsensusVote - In the top %d (%d)\n", SWIFTTX_SIGNATURES_TOTAL, n);
+
+    CConsensusVote ctx;
+    ctx.vinMasternode = activeMasternode.vin;
+    ct
