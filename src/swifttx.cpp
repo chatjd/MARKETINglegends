@@ -273,4 +273,168 @@ void DoConsensusVote(CTransaction& tx, int64_t nBlockHeight)
 
     CConsensusVote ctx;
     ctx.vinMasternode = activeMasternode.vin;
-    ct
+    ctx.txHash = tx.GetHash();
+    ctx.nBlockHeight = nBlockHeight;
+    if (!ctx.Sign()) {
+        LogPrintf("SwiftX::DoConsensusVote - Failed to sign consensus vote\n");
+        return;
+    }
+    if (!ctx.SignatureValid()) {
+        LogPrintf("SwiftX::DoConsensusVote - Signature invalid\n");
+        return;
+    }
+
+    mapTxLockVote[ctx.GetHash()] = ctx;
+
+    CInv inv(MSG_TXLOCK_VOTE, ctx.GetHash());
+    RelayInv(inv);
+}
+
+//received a consensus vote
+bool ProcessConsensusVote(CNode* pnode, CConsensusVote& ctx)
+{
+    int n = mnodeman.GetMasternodeRank(ctx.vinMasternode, ctx.nBlockHeight, MIN_SWIFTTX_PROTO_VERSION);
+
+    CMasternode* pmn = mnodeman.Find(ctx.vinMasternode);
+    if (pmn != NULL)
+        LogPrint("swiftx", "SwiftX::ProcessConsensusVote - Masternode ADDR %s %d\n", pmn->addr.ToString().c_str(), n);
+
+    if (n == -1) {
+        //can be caused by past versions trying to vote with an invalid protocol
+        LogPrint("swiftx", "SwiftX::ProcessConsensusVote - Unknown Masternode\n");
+        mnodeman.AskForMN(pnode, ctx.vinMasternode);
+        return false;
+    }
+
+    if (n > SWIFTTX_SIGNATURES_TOTAL) {
+        LogPrint("swiftx", "SwiftX::ProcessConsensusVote - Masternode not in the top %d (%d) - %s\n", SWIFTTX_SIGNATURES_TOTAL, n, ctx.GetHash().ToString().c_str());
+        return false;
+    }
+
+    if (!ctx.SignatureValid()) {
+        LogPrintf("SwiftX::ProcessConsensusVote - Signature invalid\n");
+        // don't ban, it could just be a non-synced masternode
+        mnodeman.AskForMN(pnode, ctx.vinMasternode);
+        return false;
+    }
+
+    if (!mapTxLocks.count(ctx.txHash)) {
+        LogPrintf("SwiftX::ProcessConsensusVote - New Transaction Lock %s !\n", ctx.txHash.ToString().c_str());
+
+        CTransactionLock newLock;
+        newLock.nBlockHeight = 0;
+        newLock.nExpiration = GetTime() + (60 * 60);
+        newLock.nTimeout = GetTime() + (60 * 5);
+        newLock.txHash = ctx.txHash;
+        mapTxLocks.insert(make_pair(ctx.txHash, newLock));
+    } else
+        LogPrint("swiftx", "SwiftX::ProcessConsensusVote - Transaction Lock Exists %s !\n", ctx.txHash.ToString().c_str());
+
+    //compile consessus vote
+    std::map<uint256, CTransactionLock>::iterator i = mapTxLocks.find(ctx.txHash);
+    if (i != mapTxLocks.end()) {
+        (*i).second.AddSignature(ctx);
+
+#ifdef ENABLE_WALLET
+        if (pwalletMain) {
+            //when we get back signatures, we'll count them as requests. Otherwise the client will think it didn't propagate.
+            if (pwalletMain->mapRequestCount.count(ctx.txHash))
+                pwalletMain->mapRequestCount[ctx.txHash]++;
+        }
+#endif
+
+        LogPrint("swiftx", "SwiftX::ProcessConsensusVote - Transaction Lock Votes %d - %s !\n", (*i).second.CountSignatures(), ctx.GetHash().ToString().c_str());
+
+        if ((*i).second.CountSignatures() >= SWIFTTX_SIGNATURES_REQUIRED) {
+            LogPrint("swiftx", "SwiftX::ProcessConsensusVote - Transaction Lock Is Complete %s !\n", (*i).second.GetHash().ToString().c_str());
+
+            CTransaction& tx = mapTxLockReq[ctx.txHash];
+            if (!CheckForConflictingLocks(tx)) {
+#ifdef ENABLE_WALLET
+                if (pwalletMain) {
+                    if (pwalletMain->UpdatedTransaction((*i).second.txHash)) {
+                        nCompleteTXLocks++;
+                    }
+                }
+#endif
+
+                if (mapTxLockReq.count(ctx.txHash)) {
+                    BOOST_FOREACH (const CTxIn& in, tx.vin) {
+                        if (!mapLockedInputs.count(in.prevout)) {
+                            mapLockedInputs.insert(make_pair(in.prevout, ctx.txHash));
+                        }
+                    }
+                }
+
+                // resolve conflicts
+
+                //if this tx lock was rejected, we need to remove the conflicting blocks
+                if (mapTxLockReqRejected.count((*i).second.txHash)) {
+                    //reprocess the last 15 blocks
+                    ReprocessBlocks(15);
+                }
+            }
+        }
+        return true;
+    }
+
+
+    return false;
+}
+
+bool CheckForConflictingLocks(CTransaction& tx)
+{
+    /*
+        It's possible (very unlikely though) to get 2 conflicting transaction locks approved by the network.
+        In that case, they will cancel each other out.
+
+        Blocks could have been rejected during this time, which is OK. After they cancel out, the client will
+        rescan the blocks and find they're acceptable and then take the chain with the most work.
+    */
+    BOOST_FOREACH (const CTxIn& in, tx.vin) {
+        if (mapLockedInputs.count(in.prevout)) {
+            if (mapLockedInputs[in.prevout] != tx.GetHash()) {
+                LogPrintf("SwiftX::CheckForConflictingLocks - found two complete conflicting locks - removing both. %s %s", tx.GetHash().ToString().c_str(), mapLockedInputs[in.prevout].ToString().c_str());
+                if (mapTxLocks.count(tx.GetHash())) mapTxLocks[tx.GetHash()].nExpiration = GetTime();
+                if (mapTxLocks.count(mapLockedInputs[in.prevout])) mapTxLocks[mapLockedInputs[in.prevout]].nExpiration = GetTime();
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+int64_t GetAverageVoteTime()
+{
+    std::map<uint256, int64_t>::iterator it = mapUnknownVotes.begin();
+    int64_t total = 0;
+    int64_t count = 0;
+
+    while (it != mapUnknownVotes.end()) {
+        total += it->second;
+        count++;
+        it++;
+    }
+
+    return total / count;
+}
+
+void CleanTransactionLocksList()
+{
+    if (chainActive.Tip() == NULL) return;
+
+    std::map<uint256, CTransactionLock>::iterator it = mapTxLocks.begin();
+
+    while (it != mapTxLocks.end()) {
+        if (GetTime() > it->second.nExpiration) { //keep them for an hour
+            LogPrintf("Removing old transaction lock %s\n", it->second.txHash.ToString().c_str());
+
+            if (mapTxLockReq.count(it->second.txHash)) {
+                CTransaction& tx = mapTxLockReq[it->second.txHash];
+
+                BOOST_FOREACH (const CTxIn& in, tx.vin)
+                    mapLockedInputs.erase(in.prevout);
+
+                mapTxLockReq.erase(it->second.txHash);
+                mapTxLockReqRejected.erase(it->second.txHash);
