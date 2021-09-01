@@ -438,3 +438,118 @@ void CleanTransactionLocksList()
 
                 mapTxLockReq.erase(it->second.txHash);
                 mapTxLockReqRejected.erase(it->second.txHash);
+
+                BOOST_FOREACH (CConsensusVote& v, it->second.vecConsensusVotes)
+                    mapTxLockVote.erase(v.GetHash());
+            }
+
+            mapTxLocks.erase(it++);
+        } else {
+            it++;
+        }
+    }
+}
+
+uint256 CConsensusVote::GetHash() const
+{
+    arith_uint256 temp = (UintToArith256)(vinMasternode.prevout.hash) + vinMasternode.prevout.n;
+    return ArithToUint256(temp + UintToArith256(txHash));
+}
+
+
+bool CConsensusVote::SignatureValid()
+{
+    std::string errorMessage;
+    std::string strMessage = txHash.ToString().c_str() + boost::lexical_cast<std::string>(nBlockHeight);
+    //LogPrintf("verify strMessage %s \n", strMessage.c_str());
+
+    CMasternode* pmn = mnodeman.Find(vinMasternode);
+
+    if (pmn == NULL) {
+        LogPrintf("SwiftX::CConsensusVote::SignatureValid() - Unknown Masternode\n");
+        return false;
+    }
+
+    if (!obfuScationSigner.VerifyMessage(pmn->pubKeyMasternode, vchMasterNodeSignature, strMessage, errorMessage)) {
+        LogPrintf("SwiftX::CConsensusVote::SignatureValid() - Verify message failed\n");
+        return false;
+    }
+
+    return true;
+}
+
+bool CConsensusVote::Sign()
+{
+    std::string errorMessage;
+
+    CKey key2;
+    CPubKey pubkey2;
+    std::string strMessage = txHash.ToString().c_str() + boost::lexical_cast<std::string>(nBlockHeight);
+    //LogPrintf("signing strMessage %s \n", strMessage.c_str());
+    //LogPrintf("signing privkey %s \n", strMasterNodePrivKey.c_str());
+
+    if (!obfuScationSigner.SetKey(strMasterNodePrivKey, errorMessage, key2, pubkey2)) {
+        LogPrintf("CConsensusVote::Sign() - ERROR: Invalid masternodeprivkey: '%s'\n", errorMessage.c_str());
+        return false;
+    }
+
+    if (!obfuScationSigner.SignMessage(strMessage, errorMessage, vchMasterNodeSignature, key2)) {
+        LogPrintf("CConsensusVote::Sign() - Sign message failed");
+        return false;
+    }
+
+    if (!obfuScationSigner.VerifyMessage(pubkey2, vchMasterNodeSignature, strMessage, errorMessage)) {
+        LogPrintf("CConsensusVote::Sign() - Verify message failed");
+        return false;
+    }
+
+    return true;
+}
+
+
+bool CTransactionLock::SignaturesValid()
+{
+    BOOST_FOREACH (CConsensusVote vote, vecConsensusVotes) {
+        int n = mnodeman.GetMasternodeRank(vote.vinMasternode, vote.nBlockHeight, MIN_SWIFTTX_PROTO_VERSION);
+
+        if (n == -1) {
+            LogPrintf("CTransactionLock::SignaturesValid() - Unknown Masternode\n");
+            return false;
+        }
+
+        if (n > SWIFTTX_SIGNATURES_TOTAL) {
+            LogPrintf("CTransactionLock::SignaturesValid() - Masternode not in the top %s\n", SWIFTTX_SIGNATURES_TOTAL);
+            return false;
+        }
+
+        if (!vote.SignatureValid()) {
+            LogPrintf("CTransactionLock::SignaturesValid() - Signature not valid\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void CTransactionLock::AddSignature(CConsensusVote& cv)
+{
+    vecConsensusVotes.push_back(cv);
+}
+
+int CTransactionLock::CountSignatures()
+{
+    /*
+        Only count signatures where the BlockHeight matches the transaction's blockheight.
+        The votes have no proof it's the correct blockheight
+    */
+
+    if (nBlockHeight == 0) return -1;
+
+    int n = 0;
+    BOOST_FOREACH (CConsensusVote v, vecConsensusVotes) {
+        if (v.nBlockHeight == nBlockHeight) {
+            n++;
+        }
+    }
+    return n;
+}
