@@ -421,4 +421,27 @@ BOOST_AUTO_TEST_CASE(PartitionAlert)
     BOOST_TEST_MESSAGE(std::string("Got alert text: ")+strMiscWarning);
     strMiscWarning = "";
 
-    // Test 3: test the "partition alerts only g
+    // Test 3: test the "partition alerts only go off once per day"
+    // code:
+    now += 60*10;
+    SetMockTime(now);
+    PartitionCheck(falseFunc, csDummy, &indexDummy[399], nPowTargetSpacing);
+    BOOST_CHECK(strMiscWarning.empty());
+
+    // Test 4: get 2.5 times as many blocks as expected:
+    now += 60*60*24; // Pretend it is a day later
+    SetMockTime(now);
+    int64_t quickSpacing = nPowTargetSpacing*2/5;
+    for (int i = 0; i < 400; i++) // Tweak chain timestamps:
+        indexDummy[i].nTime = now - (400-i)*quickSpacing;
+    PartitionCheck(falseFunc, csDummy, &indexDummy[399], nPowTargetSpacing);
+    BOOST_CHECK(!strMiscWarning.empty());
+    BOOST_TEST_MESSAGE(std::string("Got alert text: ")+strMiscWarning);
+    strMiscWarning = "";
+
+    SetMockTime(0);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+#endif
