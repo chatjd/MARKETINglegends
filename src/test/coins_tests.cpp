@@ -455,4 +455,230 @@ template<typename Tree> void anchorRegressionTestImpl(ShieldedType type)
         cache1.Flush();
 
         cache1.PopAnchor(Tree::empty_root(), type);
-        BOOST_
+        BOOST_CHECK(cache1.GetBestAnchor(type) == Tree::empty_root());
+        BOOST_CHECK(!GetAnchorAt(cache1, tree.root(), tree));
+    }
+
+    // Also correct behavior:
+    {
+        CCoinsViewTest base;
+        CCoinsViewCacheTest cache1(&base);
+
+        // Insert anchor into base.
+        Tree tree;
+        tree.append(GetRandHash());
+        cache1.PushAnchor(tree);
+        cache1.Flush();
+
+        cache1.PopAnchor(Tree::empty_root(), type);
+        cache1.Flush();
+        BOOST_CHECK(cache1.GetBestAnchor(type) == Tree::empty_root());
+        BOOST_CHECK(!GetAnchorAt(cache1, tree.root(), tree));
+    }
+
+    // Works because we bring the anchor in from parent cache.
+    {
+        CCoinsViewTest base;
+        CCoinsViewCacheTest cache1(&base);
+
+        // Insert anchor into base.
+        Tree tree;
+        tree.append(GetRandHash());
+        cache1.PushAnchor(tree);
+        cache1.Flush();
+
+        {
+            // Pop anchor.
+            CCoinsViewCacheTest cache2(&cache1);
+            BOOST_CHECK(GetAnchorAt(cache2, tree.root(), tree));
+            cache2.PopAnchor(Tree::empty_root(), type);
+            cache2.Flush();
+        }
+
+        BOOST_CHECK(cache1.GetBestAnchor(type) == Tree::empty_root());
+        BOOST_CHECK(!GetAnchorAt(cache1, tree.root(), tree));
+    }
+
+    // Was broken:
+    {
+        CCoinsViewTest base;
+        CCoinsViewCacheTest cache1(&base);
+
+        // Insert anchor into base.
+        Tree tree;
+        tree.append(GetRandHash());
+        cache1.PushAnchor(tree);
+        cache1.Flush();
+
+        {
+            // Pop anchor.
+            CCoinsViewCacheTest cache2(&cache1);
+            cache2.PopAnchor(Tree::empty_root(), type);
+            cache2.Flush();
+        }
+
+        BOOST_CHECK(cache1.GetBestAnchor(type) == Tree::empty_root());
+        BOOST_CHECK(!GetAnchorAt(cache1, tree.root(), tree));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(anchor_regression_test)
+{
+    BOOST_TEST_CONTEXT("Sprout") {
+        anchorRegressionTestImpl<SproutMerkleTree>(SPROUT);
+    }
+    BOOST_TEST_CONTEXT("Sapling") {
+        anchorRegressionTestImpl<SaplingMerkleTree>(SAPLING);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(nullifiers_test)
+{
+    CCoinsViewTest base;
+    CCoinsViewCacheTest cache(&base);
+
+    TxWithNullifiers txWithNullifiers;
+    checkNullifierCache(cache, txWithNullifiers, false);
+    cache.SetNullifiers(txWithNullifiers.tx, true);
+    checkNullifierCache(cache, txWithNullifiers, true);
+    cache.Flush();
+
+    CCoinsViewCacheTest cache2(&base);
+
+    checkNullifierCache(cache2, txWithNullifiers, true);
+    cache2.SetNullifiers(txWithNullifiers.tx, false);
+    checkNullifierCache(cache2, txWithNullifiers, false);
+    cache2.Flush();
+
+    CCoinsViewCacheTest cache3(&base);
+
+    checkNullifierCache(cache3, txWithNullifiers, false);
+}
+
+template<typename Tree> void anchorsFlushImpl(ShieldedType type)
+{
+    CCoinsViewTest base;
+    uint256 newrt;
+    {
+        CCoinsViewCacheTest cache(&base);
+        Tree tree;
+        BOOST_CHECK(GetAnchorAt(cache, cache.GetBestAnchor(type), tree));
+        tree.append(GetRandHash());
+
+        newrt = tree.root();
+
+        cache.PushAnchor(tree);
+        cache.Flush();
+    }
+    
+    {
+        CCoinsViewCacheTest cache(&base);
+        Tree tree;
+        BOOST_CHECK(GetAnchorAt(cache, cache.GetBestAnchor(type), tree));
+
+        // Get the cached entry.
+        BOOST_CHECK(GetAnchorAt(cache, cache.GetBestAnchor(type), tree));
+
+        uint256 check_rt = tree.root();
+
+        BOOST_CHECK(check_rt == newrt);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(anchors_flush_test)
+{
+    BOOST_TEST_CONTEXT("Sprout") {
+        anchorsFlushImpl<SproutMerkleTree>(SPROUT);
+    }
+    BOOST_TEST_CONTEXT("Sapling") {
+        anchorsFlushImpl<SaplingMerkleTree>(SAPLING);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(chained_joinsplits)
+{
+    // TODO update this or add a similar test when the SaplingNote class exist
+    CCoinsViewTest base;
+    CCoinsViewCacheTest cache(&base);
+
+    SproutMerkleTree tree;
+
+    JSDescription js1;
+    js1.anchor = tree.root();
+    js1.commitments[0] = appendRandomSproutCommitment(tree);
+    js1.commitments[1] = appendRandomSproutCommitment(tree);
+
+    // Although it's not possible given our assumptions, if
+    // two joinsplits create the same treestate twice, we should
+    // still be able to anchor to it.
+    JSDescription js1b;
+    js1b.anchor = tree.root();
+    js1b.commitments[0] = js1.commitments[0];
+    js1b.commitments[1] = js1.commitments[1];
+
+    JSDescription js2;
+    JSDescription js3;
+
+    js2.anchor = tree.root();
+    js3.anchor = tree.root();
+
+    js2.commitments[0] = appendRandomSproutCommitment(tree);
+    js2.commitments[1] = appendRandomSproutCommitment(tree);
+
+    js3.commitments[0] = appendRandomSproutCommitment(tree);
+    js3.commitments[1] = appendRandomSproutCommitment(tree);
+
+    {
+        CMutableTransaction mtx;
+        mtx.vjoinsplit.push_back(js2);
+
+        BOOST_CHECK(!cache.HaveJoinSplitRequirements(mtx));
+    }
+
+    {
+        // js2 is trying to anchor to js1 but js1
+        // appears afterwards -- not a permitted ordering
+        CMutableTransaction mtx;
+        mtx.vjoinsplit.push_back(js2);
+        mtx.vjoinsplit.push_back(js1);
+
+        BOOST_CHECK(!cache.HaveJoinSplitRequirements(mtx));
+    }
+
+    {
+        CMutableTransaction mtx;
+        mtx.vjoinsplit.push_back(js1);
+        mtx.vjoinsplit.push_back(js2);
+
+        BOOST_CHECK(cache.HaveJoinSplitRequirements(mtx));
+    }
+
+    {
+        CMutableTransaction mtx;
+        mtx.vjoinsplit.push_back(js1);
+        mtx.vjoinsplit.push_back(js2);
+        mtx.vjoinsplit.push_back(js3);
+
+        BOOST_CHECK(cache.HaveJoinSplitRequirements(mtx));
+    }
+
+    {
+        CMutableTransaction mtx;
+        mtx.vjoinsplit.push_back(js1);
+        mtx.vjoinsplit.push_back(js1b);
+        mtx.vjoinsplit.push_back(js2);
+        mtx.vjoinsplit.push_back(js3);
+
+        BOOST_CHECK(cache.HaveJoinSplitRequirements(mtx));
+    }
+}
+
+template<typename Tree> void anchorsTestImpl(ShieldedType type)
+{
+    // TODO: These tests should be more methodical.
+    //       Or, integrate with Bitcoin's tests later.
+
+    CCoinsViewTest base;
+    CCoinsViewCacheTest cache(&base);
+
+    BOOST_CHECK(cache.GetBestAnchor(type) == Tree::e
