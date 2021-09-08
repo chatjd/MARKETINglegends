@@ -681,4 +681,186 @@ template<typename Tree> void anchorsTestImpl(ShieldedType type)
     CCoinsViewTest base;
     CCoinsViewCacheTest cache(&base);
 
-    BOOST_CHECK(cache.GetBestAnchor(type) == Tree::e
+    BOOST_CHECK(cache.GetBestAnchor(type) == Tree::empty_root());
+
+    {
+        Tree tree;
+
+        BOOST_CHECK(GetAnchorAt(cache, cache.GetBestAnchor(type), tree));
+        BOOST_CHECK(cache.GetBestAnchor(type) == tree.root());
+        tree.append(GetRandHash());
+        tree.append(GetRandHash());
+        tree.append(GetRandHash());
+        tree.append(GetRandHash());
+        tree.append(GetRandHash());
+        tree.append(GetRandHash());
+        tree.append(GetRandHash());
+
+        Tree save_tree_for_later;
+        save_tree_for_later = tree;
+
+        uint256 newrt = tree.root();
+        uint256 newrt2;
+
+        cache.PushAnchor(tree);
+        BOOST_CHECK(cache.GetBestAnchor(type) == newrt);
+
+        {
+            Tree confirm_same;
+            BOOST_CHECK(GetAnchorAt(cache, cache.GetBestAnchor(type), confirm_same));
+
+            BOOST_CHECK(confirm_same.root() == newrt);
+        }
+
+        tree.append(GetRandHash());
+        tree.append(GetRandHash());
+
+        newrt2 = tree.root();
+
+        cache.PushAnchor(tree);
+        BOOST_CHECK(cache.GetBestAnchor(type) == newrt2);
+
+        Tree test_tree;
+        BOOST_CHECK(GetAnchorAt(cache, cache.GetBestAnchor(type), test_tree));
+
+        BOOST_CHECK(tree.root() == test_tree.root());
+
+        {
+            Tree test_tree2;
+            GetAnchorAt(cache, newrt, test_tree2);
+            
+            BOOST_CHECK(test_tree2.root() == newrt);
+        }
+
+        {
+            cache.PopAnchor(newrt, type);
+            Tree obtain_tree;
+            assert(!GetAnchorAt(cache, newrt2, obtain_tree)); // should have been popped off
+            assert(GetAnchorAt(cache, newrt, obtain_tree));
+
+            assert(obtain_tree.root() == newrt);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(anchors_test)
+{
+    BOOST_TEST_CONTEXT("Sprout") {
+        anchorsTestImpl<SproutMerkleTree>(SPROUT);
+    }
+    BOOST_TEST_CONTEXT("Sapling") {
+        anchorsTestImpl<SaplingMerkleTree>(SAPLING);
+    }
+}
+
+static const unsigned int NUM_SIMULATION_ITERATIONS = 40000;
+
+// This is a large randomized insert/remove simulation test on a variable-size
+// stack of caches on top of CCoinsViewTest.
+//
+// It will randomly create/update/delete CCoins entries to a tip of caches, with
+// txids picked from a limited list of random 256-bit hashes. Occasionally, a
+// new tip is added to the stack of caches, or the tip is flushed and removed.
+//
+// During the process, booleans are kept to make sure that the randomized
+// operation hits all branches.
+BOOST_AUTO_TEST_CASE(coins_cache_simulation_test)
+{
+    // Various coverage trackers.
+    bool removed_all_caches = false;
+    bool reached_4_caches = false;
+    bool added_an_entry = false;
+    bool removed_an_entry = false;
+    bool updated_an_entry = false;
+    bool found_an_entry = false;
+    bool missed_an_entry = false;
+
+    // A simple map to track what we expect the cache stack to represent.
+    std::map<uint256, CCoins> result;
+
+    // The cache stack.
+    CCoinsViewTest base; // A CCoinsViewTest at the bottom.
+    std::vector<CCoinsViewCacheTest*> stack; // A stack of CCoinsViewCaches on top.
+    stack.push_back(new CCoinsViewCacheTest(&base)); // Start with one cache.
+
+    // Use a limited set of random transaction ids, so we do test overwriting entries.
+    std::vector<uint256> txids;
+    txids.resize(NUM_SIMULATION_ITERATIONS / 8);
+    for (unsigned int i = 0; i < txids.size(); i++) {
+        txids[i] = GetRandHash();
+    }
+
+    for (unsigned int i = 0; i < NUM_SIMULATION_ITERATIONS; i++) {
+        // Do a random modification.
+        {
+            uint256 txid = txids[insecure_rand() % txids.size()]; // txid we're going to modify in this iteration.
+            CCoins& coins = result[txid];
+            CCoinsModifier entry = stack.back()->ModifyCoins(txid);
+            BOOST_CHECK(coins == *entry);
+            if (insecure_rand() % 5 == 0 || coins.IsPruned()) {
+                if (coins.IsPruned()) {
+                    added_an_entry = true;
+                } else {
+                    updated_an_entry = true;
+                }
+                coins.nVersion = insecure_rand();
+                coins.vout.resize(1);
+                coins.vout[0].nValue = insecure_rand();
+                *entry = coins;
+            } else {
+                coins.Clear();
+                entry->Clear();
+                removed_an_entry = true;
+            }
+        }
+
+        // Once every 1000 iterations and at the end, verify the full cache.
+        if (insecure_rand() % 1000 == 1 || i == NUM_SIMULATION_ITERATIONS - 1) {
+            for (std::map<uint256, CCoins>::iterator it = result.begin(); it != result.end(); it++) {
+                const CCoins* coins = stack.back()->AccessCoins(it->first);
+                if (coins) {
+                    BOOST_CHECK(*coins == it->second);
+                    found_an_entry = true;
+                } else {
+                    BOOST_CHECK(it->second.IsPruned());
+                    missed_an_entry = true;
+                }
+            }
+            BOOST_FOREACH(const CCoinsViewCacheTest *test, stack) {
+                test->SelfTest();
+            }
+        }
+
+        if (insecure_rand() % 100 == 0) {
+            // Every 100 iterations, change the cache stack.
+            if (stack.size() > 0 && insecure_rand() % 2 == 0) {
+                stack.back()->Flush();
+                delete stack.back();
+                stack.pop_back();
+            }
+            if (stack.size() == 0 || (stack.size() < 4 && insecure_rand() % 2)) {
+                CCoinsView* tip = &base;
+                if (stack.size() > 0) {
+                    tip = stack.back();
+                } else {
+                    removed_all_caches = true;
+                }
+                stack.push_back(new CCoinsViewCacheTest(tip));
+                if (stack.size() == 4) {
+                    reached_4_caches = true;
+                }
+            }
+        }
+    }
+
+    // Clean up the stack.
+    while (stack.size() > 0) {
+        delete stack.back();
+        stack.pop_back();
+    }
+
+    // Verify coverage.
+    BOOST_CHECK(removed_all_caches);
+    BOOST_CHECK(reached_4_caches);
+    BOOST_CHECK(added_an_entry);
+    BOOST
