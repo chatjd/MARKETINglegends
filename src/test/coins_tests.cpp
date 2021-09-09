@@ -863,4 +863,123 @@ BOOST_AUTO_TEST_CASE(coins_cache_simulation_test)
     BOOST_CHECK(removed_all_caches);
     BOOST_CHECK(reached_4_caches);
     BOOST_CHECK(added_an_entry);
-    BOOST
+    BOOST_CHECK(removed_an_entry);
+    BOOST_CHECK(updated_an_entry);
+    BOOST_CHECK(found_an_entry);
+    BOOST_CHECK(missed_an_entry);
+}
+
+BOOST_AUTO_TEST_CASE(coins_coinbase_spends)
+{
+    CCoinsViewTest base;
+    CCoinsViewCacheTest cache(&base);
+
+    // Create coinbase transaction
+    CMutableTransaction mtx;
+    mtx.vin.resize(1);
+    mtx.vin[0].scriptSig = CScript() << OP_1;
+    mtx.vin[0].nSequence = 0;
+    mtx.vout.resize(1);
+    mtx.vout[0].nValue = 500;
+    mtx.vout[0].scriptPubKey = CScript() << OP_1;
+
+    CTransaction tx(mtx);
+
+    BOOST_CHECK(tx.IsCoinBase());
+
+    CValidationState state;
+    UpdateCoins(tx, cache, 100);
+
+    // Create coinbase spend
+    CMutableTransaction mtx2;
+    mtx2.vin.resize(1);
+    mtx2.vin[0].prevout = COutPoint(tx.GetHash(), 0);
+    mtx2.vin[0].scriptSig = CScript() << OP_1;
+    mtx2.vin[0].nSequence = 0;
+
+    {
+        CTransaction tx2(mtx2);
+        BOOST_CHECK(Consensus::CheckTxInputs(tx2, state, cache, 100+COINBASE_MATURITY, Params().GetConsensus()));
+    }
+
+    mtx2.vout.resize(1);
+    mtx2.vout[0].nValue = 500;
+    mtx2.vout[0].scriptPubKey = CScript() << OP_1;
+
+    {
+        CTransaction tx2(mtx2);
+        BOOST_CHECK(!Consensus::CheckTxInputs(tx2, state, cache, 100+COINBASE_MATURITY, Params().GetConsensus()));
+        BOOST_CHECK(state.GetRejectReason() == "bad-txns-coinbase-spend-has-transparent-outputs");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(ccoins_serialization)
+{
+    // Good example
+    CDataStream ss1(ParseHex("0104835800816115944e077fe7c803cfa57f29b36bf87c1d358bb85e"), SER_DISK, CLIENT_VERSION);
+    CCoins cc1;
+    ss1 >> cc1;
+    BOOST_CHECK_EQUAL(cc1.nVersion, 1);
+    BOOST_CHECK_EQUAL(cc1.fCoinBase, false);
+    BOOST_CHECK_EQUAL(cc1.nHeight, 203998);
+    BOOST_CHECK_EQUAL(cc1.vout.size(), 2);
+    BOOST_CHECK_EQUAL(cc1.IsAvailable(0), false);
+    BOOST_CHECK_EQUAL(cc1.IsAvailable(1), true);
+    BOOST_CHECK_EQUAL(cc1.vout[1].nValue, 60000000000ULL);
+    BOOST_CHECK_EQUAL(HexStr(cc1.vout[1].scriptPubKey), HexStr(GetScriptForDestination(CKeyID(uint160(ParseHex("816115944e077fe7c803cfa57f29b36bf87c1d35"))))));
+
+    // Good example
+    CDataStream ss2(ParseHex("0109044086ef97d5790061b01caab50f1b8e9c50a5057eb43c2d9563a4eebbd123008c988f1a4a4de2161e0f50aac7f17e7f9555caa486af3b"), SER_DISK, CLIENT_VERSION);
+    CCoins cc2;
+    ss2 >> cc2;
+    BOOST_CHECK_EQUAL(cc2.nVersion, 1);
+    BOOST_CHECK_EQUAL(cc2.fCoinBase, true);
+    BOOST_CHECK_EQUAL(cc2.nHeight, 120891);
+    BOOST_CHECK_EQUAL(cc2.vout.size(), 17);
+    for (int i = 0; i < 17; i++) {
+        BOOST_CHECK_EQUAL(cc2.IsAvailable(i), i == 4 || i == 16);
+    }
+    BOOST_CHECK_EQUAL(cc2.vout[4].nValue, 234925952);
+    BOOST_CHECK_EQUAL(HexStr(cc2.vout[4].scriptPubKey), HexStr(GetScriptForDestination(CKeyID(uint160(ParseHex("61b01caab50f1b8e9c50a5057eb43c2d9563a4ee"))))));
+    BOOST_CHECK_EQUAL(cc2.vout[16].nValue, 110397);
+    BOOST_CHECK_EQUAL(HexStr(cc2.vout[16].scriptPubKey), HexStr(GetScriptForDestination(CKeyID(uint160(ParseHex("8c988f1a4a4de2161e0f50aac7f17e7f9555caa4"))))));
+
+    // Smallest possible example
+    CDataStream ssx(SER_DISK, CLIENT_VERSION);
+    BOOST_CHECK_EQUAL(HexStr(ssx.begin(), ssx.end()), "");
+
+    CDataStream ss3(ParseHex("0002000600"), SER_DISK, CLIENT_VERSION);
+    CCoins cc3;
+    ss3 >> cc3;
+    BOOST_CHECK_EQUAL(cc3.nVersion, 0);
+    BOOST_CHECK_EQUAL(cc3.fCoinBase, false);
+    BOOST_CHECK_EQUAL(cc3.nHeight, 0);
+    BOOST_CHECK_EQUAL(cc3.vout.size(), 1);
+    BOOST_CHECK_EQUAL(cc3.IsAvailable(0), true);
+    BOOST_CHECK_EQUAL(cc3.vout[0].nValue, 0);
+    BOOST_CHECK_EQUAL(cc3.vout[0].scriptPubKey.size(), 0);
+
+    // scriptPubKey that ends beyond the end of the stream
+    CDataStream ss4(ParseHex("0002000800"), SER_DISK, CLIENT_VERSION);
+    try {
+        CCoins cc4;
+        ss4 >> cc4;
+        BOOST_CHECK_MESSAGE(false, "We should have thrown");
+    } catch (const std::ios_base::failure& e) {
+    }
+
+    // Very large scriptPubKey (3*10^9 bytes) past the end of the stream
+    CDataStream tmp(SER_DISK, CLIENT_VERSION);
+    uint64_t x = 3000000000ULL;
+    tmp << VARINT(x);
+    BOOST_CHECK_EQUAL(HexStr(tmp.begin(), tmp.end()), "8a95c0bb00");
+    CDataStream ss5(ParseHex("0002008a95c0bb0000"), SER_DISK, CLIENT_VERSION);
+    try {
+        CCoins cc5;
+        ss5 >> cc5;
+        BOOST_CHECK_MESSAGE(false, "We should have thrown");
+    } catch (const std::ios_base::failure& e) {
+    }
+}
+
+BOOST_AUTO_TEST_SUITE_END()
