@@ -179,4 +179,83 @@ BOOST_AUTO_TEST_CASE(key_test1)
     BOOST_CHECK(key1.SignCompact(hashMsg, detsig));
     BOOST_CHECK(key1C.SignCompact(hashMsg, detsigc));
     BOOST_CHECK(detsig == ParseHex("1c5dbbddda71772d95ce91cd2d14b592cfbc1dd0aabd6a394b6c2d377bbe59d31d14ddda21494a4e221f0824f0b8b924c43fa43c0ad57dccdaa11f81a6bd4582f6"));
-    BOOST_CHECK(detsigc == ParseHex("205dbbddda71772d95ce
+    BOOST_CHECK(detsigc == ParseHex("205dbbddda71772d95ce91cd2d14b592cfbc1dd0aabd6a394b6c2d377bbe59d31d14ddda21494a4e221f0824f0b8b924c43fa43c0ad57dccdaa11f81a6bd4582f6"));
+    BOOST_CHECK(key2.SignCompact(hashMsg, detsig));
+    BOOST_CHECK(key2C.SignCompact(hashMsg, detsigc));
+    BOOST_CHECK(detsig == ParseHex("1c52d8a32079c11e79db95af63bb9600c5b04f21a9ca33dc129c2bfa8ac9dc1cd561d8ae5e0f6c1a16bde3719c64c2fd70e404b6428ab9a69566962e8771b5944d"));
+    BOOST_CHECK(detsigc == ParseHex("2052d8a32079c11e79db95af63bb9600c5b04f21a9ca33dc129c2bfa8ac9dc1cd561d8ae5e0f6c1a16bde3719c64c2fd70e404b6428ab9a69566962e8771b5944d"));
+}
+
+BOOST_AUTO_TEST_CASE(zc_address_test)
+{
+    for (size_t i = 0; i < 1000; i++) {
+        auto sk = SproutSpendingKey::random();
+        {
+            string sk_string = EncodeSpendingKey(sk);
+
+            BOOST_CHECK(sk_string[0] == 'S');
+            BOOST_CHECK(sk_string[1] == 'K');
+
+            auto spendingkey2 = DecodeSpendingKey(sk_string);
+            BOOST_CHECK(IsValidSpendingKey(spendingkey2));
+            BOOST_ASSERT(boost::get<SproutSpendingKey>(&spendingkey2) != nullptr);
+            auto sk2 = boost::get<SproutSpendingKey>(spendingkey2);
+            BOOST_CHECK(sk.inner() == sk2.inner());
+        }
+        {
+            auto addr = sk.address();
+
+            std::string addr_string = EncodePaymentAddress(addr);
+
+            BOOST_CHECK(addr_string[0] == 'z');
+            BOOST_CHECK(addr_string[1] == 'c');
+
+            auto paymentaddr2 = DecodePaymentAddress(addr_string);
+            BOOST_ASSERT(IsValidPaymentAddress(paymentaddr2));
+
+            BOOST_ASSERT(boost::get<SproutPaymentAddress>(&paymentaddr2) != nullptr);
+            auto addr2 = boost::get<SproutPaymentAddress>(paymentaddr2);
+            BOOST_CHECK(addr.a_pk == addr2.a_pk);
+            BOOST_CHECK(addr.pk_enc == addr2.pk_enc);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(zs_address_test)
+{
+    SelectParams(CBaseChainParams::REGTEST);
+
+    std::vector<unsigned char, secure_allocator<unsigned char>> rawSeed(32);
+    HDSeed seed(rawSeed);
+    auto m = libzcash::SaplingExtendedSpendingKey::Master(seed);
+
+    for (uint32_t i = 0; i < 1000; i++) {
+        auto sk = m.Derive(i);
+        {
+            std::string sk_string = EncodeSpendingKey(sk);
+            BOOST_CHECK(sk_string.compare(0, 27, Params().Bech32HRP(CChainParams::SAPLING_EXTENDED_SPEND_KEY)) == 0);
+
+            auto spendingkey2 = DecodeSpendingKey(sk_string);
+            BOOST_CHECK(IsValidSpendingKey(spendingkey2));
+
+            BOOST_ASSERT(boost::get<SaplingExtendedSpendingKey>(&spendingkey2) != nullptr);
+            auto sk2 = boost::get<SaplingExtendedSpendingKey>(spendingkey2);
+            BOOST_CHECK(sk == sk2);
+        }
+        {
+            auto addr = sk.DefaultAddress();
+
+            std::string addr_string = EncodePaymentAddress(addr);
+            BOOST_CHECK(addr_string.compare(0, 15, Params().Bech32HRP(CChainParams::SAPLING_PAYMENT_ADDRESS)) == 0);
+
+            auto paymentaddr2 = DecodePaymentAddress(addr_string);
+            BOOST_CHECK(IsValidPaymentAddress(paymentaddr2));
+
+            BOOST_ASSERT(boost::get<SaplingPaymentAddress>(&paymentaddr2) != nullptr);
+            auto addr2 = boost::get<SaplingPaymentAddress>(paymentaddr2);
+            BOOST_CHECK(addr == addr2);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_SUITE_END()
