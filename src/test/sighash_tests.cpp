@@ -106,4 +106,156 @@ std::uniform_int_distribution<int> sapling_version_dist(
     CTransaction::SAPLING_MIN_CURRENT_VERSION,
     CTransaction::SAPLING_MAX_CURRENT_VERSION);
 
-void static RandomTransaction(CMutableTransaction &tx, bool fSingle, uint32_t co
+void static RandomTransaction(CMutableTransaction &tx, bool fSingle, uint32_t consensusBranchId) {
+    tx.fOverwintered = insecure_rand() % 2;
+    if (tx.fOverwintered) {
+        if (insecure_rand() % 2) {
+            tx.nVersionGroupId = SAPLING_VERSION_GROUP_ID;
+            tx.nVersion = sapling_version_dist(rng);
+        } else {
+            tx.nVersionGroupId = OVERWINTER_VERSION_GROUP_ID;
+            tx.nVersion = overwinter_version_dist(rng);
+        }
+        tx.nExpiryHeight = (insecure_rand() % 2) ? insecure_rand() : 0;
+    } else {
+        tx.nVersion = insecure_rand() & 0x7FFFFFFF;
+    }
+    tx.vin.clear();
+    tx.vout.clear();
+    tx.vShieldedSpend.clear();
+    tx.vShieldedOutput.clear();
+    tx.vjoinsplit.clear();
+    tx.nLockTime = (insecure_rand() % 2) ? insecure_rand() : 0;
+    int ins = (insecure_rand() % 4) + 1;
+    int outs = fSingle ? ins : (insecure_rand() % 4) + 1;
+    int shielded_spends = (insecure_rand() % 4) + 1;
+    int shielded_outs = (insecure_rand() % 4) + 1;
+    int joinsplits = (insecure_rand() % 4);
+    for (int in = 0; in < ins; in++) {
+        tx.vin.push_back(CTxIn());
+        CTxIn &txin = tx.vin.back();
+        txin.prevout.hash = GetRandHash();
+        txin.prevout.n = insecure_rand() % 4;
+        RandomScript(txin.scriptSig);
+        txin.nSequence = (insecure_rand() % 2) ? insecure_rand() : (unsigned int)-1;
+    }
+    for (int out = 0; out < outs; out++) {
+        tx.vout.push_back(CTxOut());
+        CTxOut &txout = tx.vout.back();
+        txout.nValue = insecure_rand() % 100000000;
+        RandomScript(txout.scriptPubKey);
+    }
+    if (tx.nVersionGroupId == SAPLING_VERSION_GROUP_ID) {
+        tx.valueBalance = insecure_rand() % 100000000;
+        for (int spend = 0; spend < shielded_spends; spend++) {
+            SpendDescription sdesc;
+            sdesc.cv = GetRandHash();
+            sdesc.anchor = GetRandHash();
+            sdesc.nullifier = GetRandHash();
+            sdesc.rk = GetRandHash();
+            randombytes_buf(sdesc.zkproof.begin(), sdesc.zkproof.size());
+            tx.vShieldedSpend.push_back(sdesc);
+        }
+        for (int out = 0; out < shielded_outs; out++) {
+            OutputDescription odesc;
+            odesc.cv = GetRandHash();
+            odesc.cm = GetRandHash();
+            odesc.ephemeralKey = GetRandHash();
+            randombytes_buf(odesc.encCiphertext.begin(), odesc.encCiphertext.size());
+            randombytes_buf(odesc.outCiphertext.begin(), odesc.outCiphertext.size());
+            randombytes_buf(odesc.zkproof.begin(), odesc.zkproof.size());
+            tx.vShieldedOutput.push_back(odesc);
+        }
+    }
+    if (tx.nVersion >= 2) {
+        for (int js = 0; js < joinsplits; js++) {
+            JSDescription jsdesc;
+            if (insecure_rand() % 2 == 0) {
+                jsdesc.vpub_old = insecure_rand() % 100000000;
+            } else {
+                jsdesc.vpub_new = insecure_rand() % 100000000;
+            }
+
+            jsdesc.anchor = GetRandHash();
+            jsdesc.nullifiers[0] = GetRandHash();
+            jsdesc.nullifiers[1] = GetRandHash();
+            jsdesc.ephemeralKey = GetRandHash();
+            jsdesc.randomSeed = GetRandHash();
+            randombytes_buf(jsdesc.ciphertexts[0].begin(), jsdesc.ciphertexts[0].size());
+            randombytes_buf(jsdesc.ciphertexts[1].begin(), jsdesc.ciphertexts[1].size());
+            if (tx.fOverwintered && tx.nVersion >= SAPLING_TX_VERSION) {
+                libzcash::GrothProof zkproof;
+                randombytes_buf(zkproof.begin(), zkproof.size());
+                jsdesc.proof = zkproof;
+            } else {
+                jsdesc.proof = libzcash::PHGRProof::random_invalid();
+            }
+            jsdesc.macs[0] = GetRandHash();
+            jsdesc.macs[1] = GetRandHash();
+
+            tx.vjoinsplit.push_back(jsdesc);
+        }
+
+        unsigned char joinSplitPrivKey[crypto_sign_SECRETKEYBYTES];
+        crypto_sign_keypair(tx.joinSplitPubKey.begin(), joinSplitPrivKey);
+
+        // Empty output script.
+        CScript scriptCode;
+        CTransaction signTx(tx);
+        uint256 dataToBeSigned = SignatureHash(scriptCode, signTx, NOT_AN_INPUT, SIGHASH_ALL, 0, consensusBranchId);
+
+        assert(crypto_sign_detached(&tx.joinSplitSig[0], NULL,
+                                    dataToBeSigned.begin(), 32,
+                                    joinSplitPrivKey
+                                    ) == 0);
+    }
+}
+
+BOOST_FIXTURE_TEST_SUITE(sighash_tests, JoinSplitTestingSetup)
+
+BOOST_AUTO_TEST_CASE(sighash_test)
+{
+    uint32_t overwinterBranchId = NetworkUpgradeInfo[Consensus::UPGRADE_OVERWINTER].nBranchId;
+    seed_insecure_rand(false);
+
+    #if defined(PRINT_SIGHASH_JSON)
+    std::cout << "[\n";
+    std::cout << "\t[\"raw_transaction, script, input_index, hashType, branchId, signature_hash (result)\"],\n";
+    #endif
+    int nRandomTests = 50000;
+
+    #if defined(PRINT_SIGHASH_JSON)
+    nRandomTests = 500;
+    #endif
+    for (int i=0; i<nRandomTests; i++) {
+        int nHashType = insecure_rand();
+        uint32_t consensusBranchId = NetworkUpgradeInfo[insecure_rand() % Consensus::MAX_NETWORK_UPGRADES].nBranchId;
+        CMutableTransaction txTo;
+        RandomTransaction(txTo, (nHashType & 0x1f) == SIGHASH_SINGLE, consensusBranchId);
+        CScript scriptCode;
+        RandomScript(scriptCode);
+        int nIn = insecure_rand() % txTo.vin.size();
+
+        uint256 sh, sho;
+        sho = SignatureHashOld(scriptCode, txTo, nIn, nHashType);
+        sh = SignatureHash(scriptCode, txTo, nIn, nHashType, 0, consensusBranchId);
+        #if defined(PRINT_SIGHASH_JSON)
+        CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+        ss << txTo;
+
+        std::cout << "\t[\"" ;
+        std::cout << HexStr(ss.begin(), ss.end()) << "\", \"";
+        std::cout << HexStr(scriptCode) << "\", ";
+        std::cout << nIn << ", ";
+        std::cout << nHashType << ", ";
+        std::cout << consensusBranchId << ", \"";
+        std::cout << (txTo.fOverwintered ? sh.GetHex() : sho.GetHex()) << "\"]";
+        if (i+1 != nRandomTests) {
+          std::cout << ",";
+        }
+        std::cout << "\n";
+        #endif
+        if (!txTo.fOverwintered) {
+            BOOST_CHECK(sh == sho);
+        }
+    }
