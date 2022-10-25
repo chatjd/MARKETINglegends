@@ -189,4 +189,12 @@ BOOST_AUTO_TEST_CASE(util_ParseTorReplyMapping)
     // - This parser is never used in that situation, because the
     //   SplitTorReplyLine parser enables OtherLine to be skipped.
     // - Even if these were valid, an OptArguments contains no semantic data,
-    //   so there is no point in pa
+    //   so there is no point in parsing it.
+    CheckParseTorReplyMapping("ARGS", {});
+    CheckParseTorReplyMapping("MORE ARGS", {});
+    CheckParseTorReplyMapping("MORE  ARGS", {});
+    CheckParseTorReplyMapping("EVEN more=ARGS", {});
+    CheckParseTorReplyMapping("EVEN+more ARGS", {});
+}
+
+BOOST_AUTO_TEST_SUITE_END()
