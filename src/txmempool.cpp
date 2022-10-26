@@ -221,4 +221,174 @@ void CTxMemPool::addSpentIndex(const CTxMemPoolEntry &entry, const CCoinsViewCac
         }
 
         CSpentIndexKey key = CSpentIndexKey(input.prevout.hash, input.prevout.n);
-        CSpentIndexValue value = CSpentIndexValue(txhash, j, -1, prevout.nValue, addressType, addressHa
+        CSpentIndexValue value = CSpentIndexValue(txhash, j, -1, prevout.nValue, addressType, addressHash);
+
+        mapSpent.insert(make_pair(key, value));
+        inserted.push_back(key);
+
+    }
+
+    mapSpentInserted.insert(make_pair(txhash, inserted));
+}
+
+bool CTxMemPool::getSpentIndex(CSpentIndexKey &key, CSpentIndexValue &value)
+{
+    LOCK(cs);
+    mapSpentIndex::iterator it;
+
+    it = mapSpent.find(key);
+    if (it != mapSpent.end()) {
+        value = it->second;
+        return true;
+    }
+    return false;
+}
+
+bool CTxMemPool::removeSpentIndex(const uint256 txhash)
+{
+    LOCK(cs);
+    mapSpentIndexInserted::iterator it = mapSpentInserted.find(txhash);
+
+    if (it != mapSpentInserted.end()) {
+        std::vector<CSpentIndexKey> keys = (*it).second;
+        for (std::vector<CSpentIndexKey>::iterator mit = keys.begin(); mit != keys.end(); mit++) {
+            mapSpent.erase(*mit);
+        }
+        mapSpentInserted.erase(it);
+    }
+
+    return true;
+}
+
+void CTxMemPool::remove(const CTransaction &origTx, std::list<CTransaction>& removed, bool fRecursive)
+{
+    // Remove transaction from memory pool
+    {
+        LOCK(cs);
+        std::deque<uint256> txToRemove;
+        txToRemove.push_back(origTx.GetHash());
+        if (fRecursive && !mapTx.count(origTx.GetHash())) {
+            // If recursively removing but origTx isn't in the mempool
+            // be sure to remove any children that are in the pool. This can
+            // happen during chain re-orgs if origTx isn't re-accepted into
+            // the mempool for any reason.
+            for (unsigned int i = 0; i < origTx.vout.size(); i++) {
+                std::map<COutPoint, CInPoint>::iterator it = mapNextTx.find(COutPoint(origTx.GetHash(), i));
+                if (it == mapNextTx.end())
+                    continue;
+                txToRemove.push_back(it->second.ptx->GetHash());
+            }
+        }
+        while (!txToRemove.empty())
+        {
+            uint256 hash = txToRemove.front();
+            txToRemove.pop_front();
+            if (!mapTx.count(hash))
+                continue;
+            const CTransaction& tx = mapTx.find(hash)->GetTx();
+            if (fRecursive) {
+                for (unsigned int i = 0; i < tx.vout.size(); i++) {
+                    std::map<COutPoint, CInPoint>::iterator it = mapNextTx.find(COutPoint(hash, i));
+                    if (it == mapNextTx.end())
+                        continue;
+                    txToRemove.push_back(it->second.ptx->GetHash());
+                }
+            }
+            BOOST_FOREACH(const CTxIn& txin, tx.vin)
+                mapNextTx.erase(txin.prevout);
+            BOOST_FOREACH(const JSDescription& joinsplit, tx.vjoinsplit) {
+                BOOST_FOREACH(const uint256& nf, joinsplit.nullifiers) {
+                    mapSproutNullifiers.erase(nf);
+                }
+            }
+            for (const SpendDescription &spendDescription : tx.vShieldedSpend) {
+                mapSaplingNullifiers.erase(spendDescription.nullifier);
+            }
+            removed.push_back(tx);
+            totalTxSize -= mapTx.find(hash)->GetTxSize();
+            cachedInnerUsage -= mapTx.find(hash)->DynamicMemoryUsage();
+            mapTx.erase(hash);
+            nTransactionsUpdated++;
+            minerPolicyEstimator->removeTx(hash);
+            removeAddressIndex(hash);
+            removeSpentIndex(hash);
+        }
+    }
+}
+
+void CTxMemPool::removeForReorg(const CCoinsViewCache *pcoins, unsigned int nMemPoolHeight, int flags)
+{
+    // Remove transactions spending a coinbase which are now immature and no-longer-final transactions
+    LOCK(cs);
+    list<CTransaction> transactionsToRemove;
+    for (indexed_transaction_set::const_iterator it = mapTx.begin(); it != mapTx.end(); it++) {
+        const CTransaction& tx = it->GetTx();
+        if (!CheckFinalTx(tx, flags)) {
+            transactionsToRemove.push_back(tx);
+        } else if (it->GetSpendsCoinbase()) {
+            BOOST_FOREACH(const CTxIn& txin, tx.vin) {
+                indexed_transaction_set::const_iterator it2 = mapTx.find(txin.prevout.hash);
+                if (it2 != mapTx.end())
+                    continue;
+                const CCoins *coins = pcoins->AccessCoins(txin.prevout.hash);
+		if (nCheckFrequency != 0) assert(coins);
+                if (!coins || (coins->IsCoinBase() && ((signed long)nMemPoolHeight) - coins->nHeight < COINBASE_MATURITY)) {
+                    transactionsToRemove.push_back(tx);
+                    break;
+                }
+            }
+        }
+    }
+    BOOST_FOREACH(const CTransaction& tx, transactionsToRemove) {
+        list<CTransaction> removed;
+        remove(tx, removed, true);
+    }
+}
+
+
+void CTxMemPool::removeWithAnchor(const uint256 &invalidRoot, ShieldedType type)
+{
+    // If a block is disconnected from the tip, and the root changed,
+    // we must invalidate transactions from the mempool which spend
+    // from that root -- almost as though they were spending coinbases
+    // which are no longer valid to spend due to coinbase maturity.
+    LOCK(cs);
+    list<CTransaction> transactionsToRemove;
+
+    for (indexed_transaction_set::const_iterator it = mapTx.begin(); it != mapTx.end(); it++) {
+        const CTransaction& tx = it->GetTx();
+        switch (type) {
+            case SPROUT:
+                BOOST_FOREACH(const JSDescription& joinsplit, tx.vjoinsplit) {
+                    if (joinsplit.anchor == invalidRoot) {
+                        transactionsToRemove.push_back(tx);
+                        break;
+                    }
+                }
+            break;
+            case SAPLING:
+                BOOST_FOREACH(const SpendDescription& spendDescription, tx.vShieldedSpend) {
+                    if (spendDescription.anchor == invalidRoot) {
+                        transactionsToRemove.push_back(tx);
+                        break;
+                    }
+                }
+            break;
+            default:
+                throw runtime_error("Unknown shielded type");
+            break;
+        }
+    }
+
+    BOOST_FOREACH(const CTransaction& tx, transactionsToRemove) {
+        list<CTransaction> removed;
+        remove(tx, removed, true);
+    }
+}
+
+void CTxMemPool::removeConflicts(const CTransaction &tx, std::list<CTransaction>& removed)
+{
+    // Remove transactions which depend on inputs of tx, recursively
+    list<CTransaction> result;
+    LOCK(cs);
+    BOOST_FOREAC
