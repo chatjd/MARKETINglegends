@@ -391,4 +391,173 @@ void CTxMemPool::removeConflicts(const CTransaction &tx, std::list<CTransaction>
     // Remove transactions which depend on inputs of tx, recursively
     list<CTransaction> result;
     LOCK(cs);
-    BOOST_FOREAC
+    BOOST_FOREACH(const CTxIn &txin, tx.vin) {
+        std::map<COutPoint, CInPoint>::iterator it = mapNextTx.find(txin.prevout);
+        if (it != mapNextTx.end()) {
+            const CTransaction &txConflict = *it->second.ptx;
+            if (txConflict != tx)
+            {
+                remove(txConflict, removed, true);
+            }
+        }
+    }
+
+    BOOST_FOREACH(const JSDescription &joinsplit, tx.vjoinsplit) {
+        BOOST_FOREACH(const uint256 &nf, joinsplit.nullifiers) {
+            std::map<uint256, const CTransaction*>::iterator it = mapSproutNullifiers.find(nf);
+            if (it != mapSproutNullifiers.end()) {
+                const CTransaction &txConflict = *it->second;
+                if (txConflict != tx) {
+                    remove(txConflict, removed, true);
+                }
+            }
+        }
+    }
+    for (const SpendDescription &spendDescription : tx.vShieldedSpend) {
+        std::map<uint256, const CTransaction*>::iterator it = mapSaplingNullifiers.find(spendDescription.nullifier);
+        if (it != mapSaplingNullifiers.end()) {
+            const CTransaction &txConflict = *it->second;
+            if (txConflict != tx) {
+                remove(txConflict, removed, true);
+            }
+        }
+    }
+}
+
+void CTxMemPool::removeExpired(unsigned int nBlockHeight)
+{
+    // Remove expired txs from the mempool
+    LOCK(cs);
+    list<CTransaction> transactionsToRemove;
+    for (indexed_transaction_set::const_iterator it = mapTx.begin(); it != mapTx.end(); it++)
+    {
+        const CTransaction& tx = it->GetTx();
+        if (IsExpiredTx(tx, nBlockHeight)) {
+            transactionsToRemove.push_back(tx);
+        }
+    }
+    for (const CTransaction& tx : transactionsToRemove) {
+        list<CTransaction> removed;
+        remove(tx, removed, true);
+        LogPrint("mempool", "Removing expired txid: %s\n", tx.GetHash().ToString());
+    }
+}
+
+/**
+ * Called when a block is connected. Removes from mempool and updates the miner fee estimator.
+ */
+void CTxMemPool::removeForBlock(const std::vector<CTransaction>& vtx, unsigned int nBlockHeight,
+                                std::list<CTransaction>& conflicts, bool fCurrentEstimate)
+{
+    LOCK(cs);
+    std::vector<CTxMemPoolEntry> entries;
+    BOOST_FOREACH(const CTransaction& tx, vtx)
+    {
+        uint256 hash = tx.GetHash();
+
+        indexed_transaction_set::iterator i = mapTx.find(hash);
+        if (i != mapTx.end())
+            entries.push_back(*i);
+    }
+    BOOST_FOREACH(const CTransaction& tx, vtx)
+    {
+        std::list<CTransaction> dummy;
+        remove(tx, dummy, false);
+        removeConflicts(tx, conflicts);
+        ClearPrioritisation(tx.GetHash());
+    }
+    // After the txs in the new block have been removed from the mempool, update policy estimates
+    minerPolicyEstimator->processBlock(nBlockHeight, entries, fCurrentEstimate);
+}
+
+/**
+ * Called whenever the tip changes. Removes transactions which don't commit to
+ * the given branch ID from the mempool.
+ */
+void CTxMemPool::removeWithoutBranchId(uint32_t nMemPoolBranchId)
+{
+    LOCK(cs);
+    std::list<CTransaction> transactionsToRemove;
+
+    for (indexed_transaction_set::const_iterator it = mapTx.begin(); it != mapTx.end(); it++) {
+        const CTransaction& tx = it->GetTx();
+        if (it->GetValidatedBranchId() != nMemPoolBranchId) {
+            transactionsToRemove.push_back(tx);
+        }
+    }
+
+    for (const CTransaction& tx : transactionsToRemove) {
+        std::list<CTransaction> removed;
+        remove(tx, removed, true);
+    }
+}
+
+void CTxMemPool::clear()
+{
+    LOCK(cs);
+    mapTx.clear();
+    mapNextTx.clear();
+    totalTxSize = 0;
+    cachedInnerUsage = 0;
+    ++nTransactionsUpdated;
+}
+
+void CTxMemPool::check(const CCoinsViewCache *pcoins) const
+{
+    if (nCheckFrequency == 0)
+        return;
+
+    if (insecure_rand() >= nCheckFrequency)
+        return;
+
+    LogPrint("mempool", "Checking mempool with %u transactions and %u inputs\n", (unsigned int)mapTx.size(), (unsigned int)mapNextTx.size());
+
+    uint64_t checkTotal = 0;
+    uint64_t innerUsage = 0;
+
+    CCoinsViewCache mempoolDuplicate(const_cast<CCoinsViewCache*>(pcoins));
+    const int64_t nSpendHeight = GetSpendHeight(mempoolDuplicate);
+
+    LOCK(cs);
+    list<const CTxMemPoolEntry*> waitingOnDependants;
+    for (indexed_transaction_set::const_iterator it = mapTx.begin(); it != mapTx.end(); it++) {
+        unsigned int i = 0;
+        checkTotal += it->GetTxSize();
+        innerUsage += it->DynamicMemoryUsage();
+        const CTransaction& tx = it->GetTx();
+        bool fDependsWait = false;
+        BOOST_FOREACH(const CTxIn &txin, tx.vin) {
+            // Check that every mempool transaction's inputs refer to available coins, or other mempool tx's.
+            indexed_transaction_set::const_iterator it2 = mapTx.find(txin.prevout.hash);
+            if (it2 != mapTx.end()) {
+                const CTransaction& tx2 = it2->GetTx();
+                assert(tx2.vout.size() > txin.prevout.n && !tx2.vout[txin.prevout.n].IsNull());
+                fDependsWait = true;
+            } else {
+                const CCoins* coins = pcoins->AccessCoins(txin.prevout.hash);
+                assert(coins && coins->IsAvailable(txin.prevout.n));
+            }
+            // Check whether its inputs are marked in mapNextTx.
+            std::map<COutPoint, CInPoint>::const_iterator it3 = mapNextTx.find(txin.prevout);
+            assert(it3 != mapNextTx.end());
+            assert(it3->second.ptx == &tx);
+            assert(it3->second.n == i);
+            i++;
+        }
+
+        boost::unordered_map<uint256, SproutMerkleTree, CCoinsKeyHasher> intermediates;
+
+        BOOST_FOREACH(const JSDescription &joinsplit, tx.vjoinsplit) {
+            BOOST_FOREACH(const uint256 &nf, joinsplit.nullifiers) {
+                assert(!pcoins->GetNullifier(nf, SPROUT));
+            }
+
+            SproutMerkleTree tree;
+            auto it = intermediates.find(joinsplit.anchor);
+            if (it != intermediates.end()) {
+                tree = it->second;
+            } else {
+                assert(pcoins->GetSproutAnchorAt(joinsplit.anchor, tree));
+            }
+
+            BOOST_FOREACH(const uint256& commitment, joinsplit.commitments)
