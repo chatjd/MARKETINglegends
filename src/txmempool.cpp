@@ -561,3 +561,189 @@ void CTxMemPool::check(const CCoinsViewCache *pcoins) const
             }
 
             BOOST_FOREACH(const uint256& commitment, joinsplit.commitments)
+            {
+                tree.append(commitment);
+            }
+
+            intermediates.insert(std::make_pair(tree.root(), tree));
+        }
+        for (const SpendDescription &spendDescription : tx.vShieldedSpend) {
+            SaplingMerkleTree tree;
+
+            assert(pcoins->GetSaplingAnchorAt(spendDescription.anchor, tree));
+            assert(!pcoins->GetNullifier(spendDescription.nullifier, SAPLING));
+        }
+        if (fDependsWait)
+            waitingOnDependants.push_back(&(*it));
+        else {
+            CValidationState state;
+            bool fCheckResult = tx.IsCoinBase() ||
+                Consensus::CheckTxInputs(tx, state, mempoolDuplicate, nSpendHeight, Params().GetConsensus());
+            assert(fCheckResult);
+            UpdateCoins(tx, mempoolDuplicate, 1000000);
+        }
+    }
+    unsigned int stepsSinceLastRemove = 0;
+    while (!waitingOnDependants.empty()) {
+        const CTxMemPoolEntry* entry = waitingOnDependants.front();
+        waitingOnDependants.pop_front();
+        CValidationState state;
+        if (!mempoolDuplicate.HaveInputs(entry->GetTx())) {
+            waitingOnDependants.push_back(entry);
+            stepsSinceLastRemove++;
+            assert(stepsSinceLastRemove < waitingOnDependants.size());
+        } else {
+            bool fCheckResult = entry->GetTx().IsCoinBase() ||
+                Consensus::CheckTxInputs(entry->GetTx(), state, mempoolDuplicate, nSpendHeight, Params().GetConsensus());
+            assert(fCheckResult);
+            UpdateCoins(entry->GetTx(), mempoolDuplicate, 1000000);
+            stepsSinceLastRemove = 0;
+        }
+    }
+    for (std::map<COutPoint, CInPoint>::const_iterator it = mapNextTx.begin(); it != mapNextTx.end(); it++) {
+        uint256 hash = it->second.ptx->GetHash();
+        indexed_transaction_set::const_iterator it2 = mapTx.find(hash);
+        const CTransaction& tx = it2->GetTx();
+        assert(it2 != mapTx.end());
+        assert(&tx == it->second.ptx);
+        assert(tx.vin.size() > it->second.n);
+        assert(it->first == it->second.ptx->vin[it->second.n].prevout);
+    }
+
+    checkNullifiers(SPROUT);
+    checkNullifiers(SAPLING);
+
+    assert(totalTxSize == checkTotal);
+    assert(innerUsage == cachedInnerUsage);
+}
+
+void CTxMemPool::checkNullifiers(ShieldedType type) const
+{
+    const std::map<uint256, const CTransaction*>* mapToUse;
+    switch (type) {
+        case SPROUT:
+            mapToUse = &mapSproutNullifiers;
+            break;
+        case SAPLING:
+            mapToUse = &mapSaplingNullifiers;
+            break;
+        default:
+            throw runtime_error("Unknown nullifier type");
+    }
+    for (const auto& entry : *mapToUse) {
+        uint256 hash = entry.second->GetHash();
+        CTxMemPool::indexed_transaction_set::const_iterator findTx = mapTx.find(hash);
+        const CTransaction& tx = findTx->GetTx();
+        assert(findTx != mapTx.end());
+        assert(&tx == entry.second);
+    }
+}
+
+void CTxMemPool::queryHashes(vector<uint256>& vtxid)
+{
+    vtxid.clear();
+
+    LOCK(cs);
+    vtxid.reserve(mapTx.size());
+    for (indexed_transaction_set::iterator mi = mapTx.begin(); mi != mapTx.end(); ++mi)
+        vtxid.push_back(mi->GetTx().GetHash());
+}
+
+bool CTxMemPool::lookup(uint256 hash, CTransaction& result) const
+{
+    LOCK(cs);
+    indexed_transaction_set::const_iterator i = mapTx.find(hash);
+    if (i == mapTx.end()) return false;
+    result = i->GetTx();
+    return true;
+}
+
+CFeeRate CTxMemPool::estimateFee(int nBlocks) const
+{
+    LOCK(cs);
+    return minerPolicyEstimator->estimateFee(nBlocks);
+}
+double CTxMemPool::estimatePriority(int nBlocks) const
+{
+    LOCK(cs);
+    return minerPolicyEstimator->estimatePriority(nBlocks);
+}
+
+bool
+CTxMemPool::WriteFeeEstimates(CAutoFile& fileout) const
+{
+    try {
+        LOCK(cs);
+        fileout << 109900; // version required to read: 0.10.99 or later
+        fileout << CLIENT_VERSION; // version that wrote the file
+        minerPolicyEstimator->Write(fileout);
+    }
+    catch (const std::exception&) {
+        LogPrintf("CTxMemPool::WriteFeeEstimates(): unable to write policy estimator data (non-fatal)\n");
+        return false;
+    }
+    return true;
+}
+
+bool
+CTxMemPool::ReadFeeEstimates(CAutoFile& filein)
+{
+    try {
+        int nVersionRequired, nVersionThatWrote;
+        filein >> nVersionRequired >> nVersionThatWrote;
+        if (nVersionRequired > CLIENT_VERSION)
+            return error("CTxMemPool::ReadFeeEstimates(): up-version (%d) fee estimate file", nVersionRequired);
+
+        LOCK(cs);
+        minerPolicyEstimator->Read(filein);
+    }
+    catch (const std::exception&) {
+        LogPrintf("CTxMemPool::ReadFeeEstimates(): unable to read policy estimator data (non-fatal)\n");
+        return false;
+    }
+    return true;
+}
+
+void CTxMemPool::PrioritiseTransaction(const uint256 hash, const string strHash, double dPriorityDelta, const CAmount& nFeeDelta)
+{
+    {
+        LOCK(cs);
+        std::pair<double, CAmount> &deltas = mapDeltas[hash];
+        deltas.first += dPriorityDelta;
+        deltas.second += nFeeDelta;
+    }
+    LogPrintf("PrioritiseTransaction: %s priority += %f, fee += %d\n", strHash, dPriorityDelta, FormatMoney(nFeeDelta));
+}
+
+void CTxMemPool::ApplyDeltas(const uint256 hash, double &dPriorityDelta, CAmount &nFeeDelta)
+{
+    LOCK(cs);
+    std::map<uint256, std::pair<double, CAmount> >::iterator pos = mapDeltas.find(hash);
+    if (pos == mapDeltas.end())
+        return;
+    const std::pair<double, CAmount> &deltas = pos->second;
+    dPriorityDelta += deltas.first;
+    nFeeDelta += deltas.second;
+}
+
+void CTxMemPool::ClearPrioritisation(const uint256 hash)
+{
+    LOCK(cs);
+    mapDeltas.erase(hash);
+}
+
+bool CTxMemPool::HasNoInputsOf(const CTransaction &tx) const
+{
+    for (unsigned int i = 0; i < tx.vin.size(); i++)
+        if (exists(tx.vin[i].prevout.hash))
+            return false;
+    return true;
+}
+
+bool CTxMemPool::nullifierExists(const uint256& nullifier, ShieldedType type) const
+{
+    switch (type) {
+        case SPROUT:
+            return mapSproutNullifiers.count(nullifier);
+        case SAPLING:
+            return mapSaplingN
