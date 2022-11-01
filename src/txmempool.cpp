@@ -746,4 +746,37 @@ bool CTxMemPool::nullifierExists(const uint256& nullifier, ShieldedType type) co
         case SPROUT:
             return mapSproutNullifiers.count(nullifier);
         case SAPLING:
-            return mapSaplingN
+            return mapSaplingNullifiers.count(nullifier);
+        default:
+            throw runtime_error("Unknown nullifier type");
+    }
+}
+
+CCoinsViewMemPool::CCoinsViewMemPool(CCoinsView *baseIn, CTxMemPool &mempoolIn) : CCoinsViewBacked(baseIn), mempool(mempoolIn) { }
+
+bool CCoinsViewMemPool::GetNullifier(const uint256 &nf, ShieldedType type) const
+{
+    return mempool.nullifierExists(nf, type) || base->GetNullifier(nf, type);
+}
+
+bool CCoinsViewMemPool::GetCoins(const uint256 &txid, CCoins &coins) const {
+    // If an entry in the mempool exists, always return that one, as it's guaranteed to never
+    // conflict with the underlying cache, and it cannot have pruned entries (as it contains full)
+    // transactions. First checking the underlying cache risks returning a pruned entry instead.
+    CTransaction tx;
+    if (mempool.lookup(txid, tx)) {
+        coins = CCoins(tx, MEMPOOL_HEIGHT);
+        return true;
+    }
+    return (base->GetCoins(txid, coins) && !coins.IsPruned());
+}
+
+bool CCoinsViewMemPool::HaveCoins(const uint256 &txid) const {
+    return mempool.exists(txid) || base->HaveCoins(txid);
+}
+
+size_t CTxMemPool::DynamicMemoryUsage() const {
+    LOCK(cs);
+    // Estimate the overhead of mapTx to be 6 pointers + an allocation, as no exact formula for boost::multi_index_contained is implemented.
+    return memusage::MallocUsage(sizeof(CTxMemPoolEntry) + 6 * sizeof(void*)) * mapTx.size() + memusage::DynamicUsage(mapNextTx) + memusage::DynamicUsage(mapDeltas) + cachedInnerUsage;
+}
