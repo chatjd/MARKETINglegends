@@ -463,4 +463,197 @@ static std::string FormatException(const std::exception* pex, const char* pszThr
             "EXCEPTION: %s       \n%s       \n%s in %s       \n", typeid(*pex).name(), pex->what(), pszModule, pszThread);
     else
         return strprintf(
-            "UNKNOWN EXCEPTION       \n%s in %s       \n", pszModule, pszThread)
+            "UNKNOWN EXCEPTION       \n%s in %s       \n", pszModule, pszThread);
+}
+
+void PrintExceptionContinue(const std::exception* pex, const char* pszThread)
+{
+    std::string message = FormatException(pex, pszThread);
+    LogPrintf("\n\n************************\n%s\n", message);
+    fprintf(stderr, "\n\n************************\n%s\n", message.c_str());
+    strMiscWarning = message;
+}
+
+boost::filesystem::path GetDefaultDataDir()
+{
+    namespace fs = boost::filesystem;
+    // Windows < Vista: C:\Documents and Settings\Username\Application Data\Vidulum
+    // Windows >= Vista: C:\Users\Username\AppData\Roaming\Vidulum
+    // Mac: ~/Library/Application Support/Vidulum
+    // Unix: ~/.vidulum
+#ifdef WIN32
+    // Windows
+    return GetSpecialFolderPath(CSIDL_APPDATA) / "Vidulum";
+#else
+    fs::path pathRet;
+    char* pszHome = getenv("HOME");
+    if (pszHome == NULL || strlen(pszHome) == 0)
+        pathRet = fs::path("/");
+    else
+        pathRet = fs::path(pszHome);
+#ifdef MAC_OSX
+    // Mac
+    pathRet /= "Library/Application Support";
+    TryCreateDirectory(pathRet);
+    return pathRet / "Vidulum";
+#else
+    // Unix
+    return pathRet / ".vidulum";
+#endif
+#endif
+}
+
+static boost::filesystem::path pathCached;
+static boost::filesystem::path pathCachedNetSpecific;
+static boost::filesystem::path zc_paramsPathCached;
+static CCriticalSection csPathCached;
+
+static boost::filesystem::path ZC_GetBaseParamsDir()
+{
+    // Copied from GetDefaultDataDir and adapter for vidulum params.
+
+    namespace fs = boost::filesystem;
+    // Windows < Vista: C:\Documents and Settings\Username\Application Data\VidulumParams
+    // Windows >= Vista: C:\Users\Username\AppData\Roaming\VidulumParams
+    // Mac: ~/Library/Application Support/VidulumParams
+    // Unix: ~/.vidulum-params
+#ifdef WIN32
+    // Windows
+    return GetSpecialFolderPath(CSIDL_APPDATA) / "VidulumParams";
+#else
+    fs::path pathRet;
+    char* pszHome = getenv("HOME");
+    if (pszHome == NULL || strlen(pszHome) == 0)
+        pathRet = fs::path("/");
+    else
+        pathRet = fs::path(pszHome);
+#ifdef MAC_OSX
+    // Mac
+    pathRet /= "Library/Application Support";
+    TryCreateDirectory(pathRet);
+    return pathRet / "VidulumParams";
+#else
+    // Unix
+    return pathRet / ".vidulum-params";
+#endif
+#endif
+}
+
+const boost::filesystem::path &ZC_GetParamsDir()
+{
+    namespace fs = boost::filesystem;
+
+    LOCK(csPathCached); // Reuse the same lock as upstream.
+
+    fs::path &path = zc_paramsPathCached;
+
+    // This can be called during exceptions by LogPrintf(), so we cache the
+    // value so we don't have to do memory allocations after that.
+    if (!path.empty())
+        return path;
+
+    path = ZC_GetBaseParamsDir();
+
+    return path;
+}
+
+// Return the user specified export directory.  Create directory if it doesn't exist.
+// If user did not set option, return an empty path.
+// If there is a filesystem problem, throw an exception.
+const boost::filesystem::path GetExportDir()
+{
+    namespace fs = boost::filesystem;
+    fs::path path;
+    if (mapArgs.count("-exportdir")) {
+        path = fs::system_complete(mapArgs["-exportdir"]);
+        if (fs::exists(path) && !fs::is_directory(path)) {
+            throw std::runtime_error(strprintf("The -exportdir '%s' already exists and is not a directory", path.string()));
+        }
+        if (!fs::exists(path) && !fs::create_directories(path)) {
+            throw std::runtime_error(strprintf("Failed to create directory at -exportdir '%s'", path.string()));
+        }
+    }
+    return path;
+}
+
+
+const boost::filesystem::path &GetDataDir(bool fNetSpecific)
+{
+    namespace fs = boost::filesystem;
+
+    LOCK(csPathCached);
+
+    fs::path &path = fNetSpecific ? pathCachedNetSpecific : pathCached;
+
+    // This can be called during exceptions by LogPrintf(), so we cache the
+    // value so we don't have to do memory allocations after that.
+    if (!path.empty())
+        return path;
+
+    if (mapArgs.count("-datadir")) {
+        path = fs::system_complete(mapArgs["-datadir"]);
+        if (!fs::is_directory(path)) {
+            path = "";
+            return path;
+        }
+    } else {
+        path = GetDefaultDataDir();
+    }
+    if (fNetSpecific)
+        path /= BaseParams().DataDir();
+
+    fs::create_directories(path);
+
+    return path;
+}
+
+void ClearDatadirCache()
+{
+    pathCached = boost::filesystem::path();
+    pathCachedNetSpecific = boost::filesystem::path();
+}
+
+boost::filesystem::path GetConfigFile()
+{
+    boost::filesystem::path pathConfigFile(GetArg("-conf", "vidulum.conf"));
+    if (!pathConfigFile.is_complete())
+        pathConfigFile = GetDataDir(false) / pathConfigFile;
+
+    return pathConfigFile;
+}
+
+boost::filesystem::path GetMasternodeConfigFile()
+{
+    boost::filesystem::path pathConfigFile(GetArg("-mnconf", "masternode.conf"));
+    if (!pathConfigFile.is_complete()) pathConfigFile = GetDataDir() / pathConfigFile;
+    return pathConfigFile;
+}
+
+void ReadConfigFile(map<string, string>& mapSettingsRet,
+                    map<string, vector<string> >& mapMultiSettingsRet)
+{
+    boost::filesystem::ifstream streamConfig(GetConfigFile());
+    if (!streamConfig.good()) {
+        // Create empty vidulum.conf if it does not exist
+        FILE* configFile = fopen(GetConfigFile().string().c_str(), "a");
+        if (configFile != NULL)
+            fclose(configFile);
+        return; // Nothing to read, so just return
+    }
+
+    set<string> setOptions;
+    setOptions.insert("*");
+
+    for (boost::program_options::detail::config_file_iterator it(streamConfig, setOptions), end; it != end; ++it)
+    {
+        // Don't overwrite existing settings so command line settings override vidulum.conf
+        string strKey = string("-") + it->string_key;
+        if (mapSettingsRet.count(strKey) == 0)
+        {
+            mapSettingsRet[strKey] = it->value[0];
+            // interpret nofoo=1 as foo=0 (and nofoo=0 as foo=1) as long as foo not set)
+            InterpretNegativeSetting(strKey, mapSettingsRet);
+        }
+        mapMultiSettingsRet[strKey].push_back(it->value[0]);
+    }
+    //
