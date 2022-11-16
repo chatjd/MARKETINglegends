@@ -265,4 +265,13 @@ template <typename Callable> void TraceThread(const char* name,  Callable func)
         throw;
     }
     catch (const std::exception& e) {
-        Print
+        PrintExceptionContinue(&e, name);
+        throw;
+    }
+    catch (...) {
+        PrintExceptionContinue(NULL, name);
+        throw;
+    }
+}
+
+#endif // BITCOIN_UTIL_H
