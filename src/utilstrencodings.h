@@ -64,4 +64,106 @@ int atoi(const std::string& str);
  * @returns true if the entire string could be parsed as valid integer,
  *   false if not the entire string could be parsed or when overflow or underflow occurred.
  */
-bool ParseInt32(
+bool ParseInt32(const std::string& str, int32_t *out);
+
+/**
+ * Convert string to signed 64-bit integer with strict parse error feedback.
+ * @returns true if the entire string could be parsed as valid integer,
+ *   false if not the entire string could be parsed or when overflow or underflow occurred.
+ */
+bool ParseInt64(const std::string& str, int64_t *out);
+
+/**
+ * Convert string to double with strict parse error feedback.
+ * @returns true if the entire string could be parsed as valid double,
+ *   false if not the entire string could be parsed or when overflow or underflow occurred.
+ */
+bool ParseDouble(const std::string& str, double *out);
+
+template<typename T>
+std::string HexStr(const T itbegin, const T itend, bool fSpaces=false)
+{
+    std::string rv;
+    static const char hexmap[16] = { '0', '1', '2', '3', '4', '5', '6', '7',
+                                     '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+    rv.reserve((itend-itbegin)*3);
+    for(T it = itbegin; it < itend; ++it)
+    {
+        unsigned char val = (unsigned char)(*it);
+        if(fSpaces && it != itbegin)
+            rv.push_back(' ');
+        rv.push_back(hexmap[val>>4]);
+        rv.push_back(hexmap[val&15]);
+    }
+
+    return rv;
+}
+
+template<typename T>
+inline std::string HexStr(const T& vch, bool fSpaces=false)
+{
+    return HexStr(vch.begin(), vch.end(), fSpaces);
+}
+
+/**
+ * Format a paragraph of text to a fixed width, adding spaces for
+ * indentation to any added line.
+ */
+std::string FormatParagraph(const std::string& in, size_t width = 79, size_t indent = 0);
+
+/**
+ * Timing-attack-resistant comparison.
+ * Takes time proportional to length
+ * of first argument.
+ */
+template <typename T>
+bool TimingResistantEqual(const T& a, const T& b)
+{
+    if (b.size() == 0) return a.size() == 0;
+    size_t accumulator = a.size() ^ b.size();
+    for (size_t i = 0; i < a.size(); i++)
+        accumulator |= a[i] ^ b[i%b.size()];
+    return accumulator == 0;
+}
+
+/** Parse number as fixed point according to JSON number syntax.
+ * See http://json.org/number.gif
+ * @returns true on success, false on error.
+ * @note The result must be in the range (-10^18,10^18), otherwise an overflow error will trigger.
+ */
+bool ParseFixedPoint(const std::string &val, int decimals, int64_t *amount_out);
+
+/**
+ * Convert from one power-of-2 number base to another.
+ *
+ * Examples using ConvertBits<8, 5, true>():
+ * 000000 -> 0000000000
+ * 202020 -> 0400100200
+ * 757575 -> 0e151a170a
+ * abcdef -> 150f061e1e
+ * ffffff -> 1f1f1f1f1e
+ */
+template<int frombits, int tobits, bool pad, typename O, typename I>
+bool ConvertBits(const O& outfn, I it, I end) {
+    size_t acc = 0;
+    size_t bits = 0;
+    constexpr size_t maxv = (1 << tobits) - 1;
+    constexpr size_t max_acc = (1 << (frombits + tobits - 1)) - 1;
+    while (it != end) {
+        acc = ((acc << frombits) | *it) & max_acc;
+        bits += frombits;
+        while (bits >= tobits) {
+            bits -= tobits;
+            outfn((acc >> bits) & maxv);
+        }
+        ++it;
+    }
+    if (pad) {
+        if (bits) outfn((acc << (tobits - bits)) & maxv);
+    } else if (bits >= frombits || ((acc << (tobits - bits)) & maxv)) {
+        return false;
+    }
+    return true;
+}
+
+#endif // BITCOIN_UTILSTRENCODINGS_H
