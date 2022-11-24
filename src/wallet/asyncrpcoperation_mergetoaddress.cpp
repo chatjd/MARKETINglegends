@@ -255,4 +255,146 @@ bool AsyncRPCOperation_mergetoaddress::main_impl()
     if (targetAmount <= minersFee) {
         throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS,
                            strprintf("Insufficient funds, have %s and miners fee is %s",
-                                     FormatMoney(targetAmount), Fo
+                                     FormatMoney(targetAmount), FormatMoney(minersFee)));
+    }
+
+    CAmount sendAmount = targetAmount - minersFee;
+
+    // update the transaction with the UTXO inputs and output (if any)
+    if (!isUsingBuilder_) {
+        CMutableTransaction rawTx(tx_);
+        for (const MergeToAddressInputUTXO& t : utxoInputs_) {
+            CTxIn in(std::get<0>(t));
+            rawTx.vin.push_back(in);
+        }
+        if (isToTaddr_) {
+            CScript scriptPubKey = GetScriptForDestination(toTaddr_);
+            CTxOut out(sendAmount, scriptPubKey);
+            rawTx.vout.push_back(out);
+        }
+        tx_ = CTransaction(rawTx);
+    }
+
+    LogPrint(isPureTaddrOnlyTx ? "zrpc" : "zrpcunsafe", "%s: spending %s to send %s with fee %s\n",
+             getId(), FormatMoney(targetAmount), FormatMoney(sendAmount), FormatMoney(minersFee));
+    LogPrint("zrpc", "%s: transparent input: %s\n", getId(), FormatMoney(t_inputs_total));
+    LogPrint("zrpcunsafe", "%s: private input: %s\n", getId(), FormatMoney(z_inputs_total));
+    if (isToTaddr_) {
+        LogPrint("zrpc", "%s: transparent output: %s\n", getId(), FormatMoney(sendAmount));
+    } else {
+        LogPrint("zrpcunsafe", "%s: private output: %s\n", getId(), FormatMoney(sendAmount));
+    }
+    LogPrint("zrpc", "%s: fee: %s\n", getId(), FormatMoney(minersFee));
+
+    // Grab the current consensus branch ID
+    {
+        LOCK(cs_main);
+        consensusBranchId_ = CurrentEpochBranchId(chainActive.Height() + 1, Params().GetConsensus());
+    }
+
+    /**
+     * SCENARIO #0
+     *
+     * Sprout not involved, so we just use the TransactionBuilder and we're done.
+     * 
+     * This is based on code from AsyncRPCOperation_sendmany::main_impl() and should be refactored.
+     */
+    if (isUsingBuilder_) {
+        builder_.SetFee(minersFee);
+
+
+        for (const MergeToAddressInputUTXO& t : utxoInputs_) {
+            COutPoint outPoint = std::get<0>(t);
+            CAmount amount = std::get<1>(t);
+            CScript scriptPubKey = std::get<2>(t);
+            builder_.AddTransparentInput(outPoint, scriptPubKey, amount);
+        }
+
+        boost::optional<uint256> ovk;
+        // Select Sapling notes
+        std::vector<SaplingOutPoint> saplingOPs;
+        std::vector<SaplingNote> saplingNotes;
+        std::vector<SaplingExpandedSpendingKey> expsks;
+        for (const MergeToAddressInputSaplingNote& saplingNoteInput: saplingNoteInputs_) {
+            saplingOPs.push_back(std::get<0>(saplingNoteInput));
+            saplingNotes.push_back(std::get<1>(saplingNoteInput));
+            auto expsk = std::get<3>(saplingNoteInput);
+            expsks.push_back(expsk);
+            if (!ovk) {
+                ovk = expsk.full_viewing_key().ovk;
+            }
+        }
+
+        // Fetch Sapling anchor and witnesses
+        uint256 anchor;
+        std::vector<boost::optional<SaplingWitness>> witnesses;
+        {
+            LOCK2(cs_main, pwalletMain->cs_wallet);
+            pwalletMain->GetSaplingNoteWitnesses(saplingOPs, witnesses, anchor);
+        }
+
+        // Add Sapling spends
+        for (size_t i = 0; i < saplingNotes.size(); i++) {
+            if (!witnesses[i]) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "Missing witness for Sapling note");
+            }
+            assert(builder_.AddSaplingSpend(expsks[i], saplingNotes[i], anchor, witnesses[i].get()));
+        }
+
+        if (isToTaddr_) {
+            if (!builder_.AddTransparentOutput(toTaddr_, sendAmount)) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid output address, not a valid taddr.");
+            }
+        } else {
+            std::string zaddr = std::get<0>(recipient_);
+            std::string memo = std::get<1>(recipient_);
+            std::array<unsigned char, ZC_MEMO_SIZE> hexMemo = get_memo_from_hex_string(memo);
+            auto saplingPaymentAddress = boost::get<libzcash::SaplingPaymentAddress>(&toPaymentAddress_);
+            if (saplingPaymentAddress == nullptr) {
+                // This should never happen as we have already determined that the payment is to sapling
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Could not get Sapling payment address.");
+            }
+            if (saplingNoteInputs_.size() == 0 && utxoInputs_.size() > 0) {
+                // Sending from t-addresses, which we don't have ovks for. Instead,
+                // generate a common one from the HD seed. This ensures the data is
+                // recoverable, while keeping it logically separate from the ZIP 32
+                // Sapling key hierarchy, which the user might not be using.
+                HDSeed seed;
+                if (!pwalletMain->GetHDSeed(seed)) {
+                    throw JSONRPCError(
+                        RPC_WALLET_ERROR,
+                        "AsyncRPCOperation_sendmany: HD seed not found");
+                }
+                ovk = ovkForShieldingFromTaddr(seed);
+            }
+            if (!ovk) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "Sending to a Sapling address requires an ovk.");
+            }
+            builder_.AddSaplingOutput(ovk.get(), *saplingPaymentAddress, sendAmount, hexMemo);
+        }
+
+
+        // Build the transaction
+        auto maybe_tx = builder_.Build();
+        if (!maybe_tx) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Failed to build transaction.");
+        }
+        tx_ = maybe_tx.get();
+
+        // Send the transaction
+        // TODO: Use CWallet::CommitTransaction instead of sendrawtransaction
+        auto signedtxn = EncodeHexTx(tx_);
+        if (!testmode) {
+            UniValue params = UniValue(UniValue::VARR);
+            params.push_back(signedtxn);
+            UniValue sendResultValue = sendrawtransaction(params, false);
+            if (sendResultValue.isNull()) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "sendrawtransaction did not return an error or a txid.");
+            }
+
+            auto txid = sendResultValue.get_str();
+
+            UniValue o(UniValue::VOBJ);
+            o.push_back(Pair("txid", txid));
+            set_result(o);
+  
