@@ -710,4 +710,179 @@ bool AsyncRPCOperation_mergetoaddress::main_impl()
         // Accumulate change
         jsChange = jsInputValue + info.vpub_old;
 
-        // Set vpub_new in the last joinsplit (when there are no more notes t
+        // Set vpub_new in the last joinsplit (when there are no more notes to spend)
+        if (zInputsDeque.empty()) {
+            assert(!vpubNewProcessed);
+            if (jsInputValue < vpubNewTarget) {
+                throw JSONRPCError(RPC_WALLET_ERROR,
+                                   strprintf("Insufficient funds for vpub_new %s (miners fee %s, taddr inputs %s)",
+                                             FormatMoney(vpubNewTarget), FormatMoney(minersFee), FormatMoney(t_inputs_total)));
+            }
+            info.vpub_new += vpubNewTarget; // funds flowing back to public pool
+            vpubNewProcessed = true;
+            jsChange -= vpubNewTarget;
+            // If we are merging to a t-addr, there should be no change
+            if (isToTaddr_) assert(jsChange == 0);
+        }
+
+        // create dummy output
+        info.vjsout.push_back(JSOutput()); // dummy output while we accumulate funds into a change note for vpub_new
+
+        // create output for any change
+        if (jsChange > 0) {
+            std::string outputType = "change";
+            auto jso = JSOutput(changeAddress, jsChange);
+            // If this is the final output, set the target and memo
+            if (isToZaddr_ && vpubNewProcessed) {
+                outputType = "target";
+                jso.addr = boost::get<libzcash::SproutPaymentAddress>(toPaymentAddress_);
+                if (!hexMemo.empty()) {
+                    jso.memo = get_memo_from_hex_string(hexMemo);
+                }
+            }
+            info.vjsout.push_back(jso);
+
+            LogPrint("zrpcunsafe", "%s: generating note for %s (amount=%s)\n",
+                     getId(),
+                     outputType,
+                     FormatMoney(jsChange));
+        }
+
+        obj = perform_joinsplit(info, witnesses, jsAnchor);
+
+        if (jsChange > 0) {
+            changeOutputIndex = mta_find_output(obj, 1);
+        }
+    }
+
+    // Sanity check in case changes to code block above exits loop by invoking 'break'
+    assert(zInputsDeque.size() == 0);
+    assert(vpubNewProcessed);
+
+    sign_send_raw_transaction(obj);
+    return true;
+}
+
+
+extern UniValue signrawtransaction(const UniValue& params, bool fHelp);
+
+/**
+ * Sign and send a raw transaction.
+ * Raw transaction as hex string should be in object field "rawtxn"
+ */
+void AsyncRPCOperation_mergetoaddress::sign_send_raw_transaction(UniValue obj)
+{
+    // Sign the raw transaction
+    UniValue rawtxnValue = find_value(obj, "rawtxn");
+    if (rawtxnValue.isNull()) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "Missing hex data for raw transaction");
+    }
+    std::string rawtxn = rawtxnValue.get_str();
+
+    UniValue params = UniValue(UniValue::VARR);
+    params.push_back(rawtxn);
+    UniValue signResultValue = signrawtransaction(params, false);
+    UniValue signResultObject = signResultValue.get_obj();
+    UniValue completeValue = find_value(signResultObject, "complete");
+    bool complete = completeValue.get_bool();
+    if (!complete) {
+        // TODO: #1366 Maybe get "errors" and print array vErrors into a string
+        throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED, "Failed to sign transaction");
+    }
+
+    UniValue hexValue = find_value(signResultObject, "hex");
+    if (hexValue.isNull()) {
+        throw JSONRPCError(RPC_WALLET_ERROR, "Missing hex data for signed transaction");
+    }
+    std::string signedtxn = hexValue.get_str();
+
+    // Send the signed transaction
+    if (!testmode) {
+        params.clear();
+        params.setArray();
+        params.push_back(signedtxn);
+        UniValue sendResultValue = sendrawtransaction(params, false);
+        if (sendResultValue.isNull()) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Send raw transaction did not return an error or a txid.");
+        }
+
+        std::string txid = sendResultValue.get_str();
+
+        UniValue o(UniValue::VOBJ);
+        o.push_back(Pair("txid", txid));
+        set_result(o);
+    } else {
+        // Test mode does not send the transaction to the network.
+
+        CDataStream stream(ParseHex(signedtxn), SER_NETWORK, PROTOCOL_VERSION);
+        CTransaction tx;
+        stream >> tx;
+
+        UniValue o(UniValue::VOBJ);
+        o.push_back(Pair("test", 1));
+        o.push_back(Pair("txid", tx.GetHash().ToString()));
+        o.push_back(Pair("hex", signedtxn));
+        set_result(o);
+    }
+
+    // Keep the signed transaction so we can hash to the same txid
+    CDataStream stream(ParseHex(signedtxn), SER_NETWORK, PROTOCOL_VERSION);
+    CTransaction tx;
+    stream >> tx;
+    tx_ = tx;
+}
+
+
+UniValue AsyncRPCOperation_mergetoaddress::perform_joinsplit(MergeToAddressJSInfo& info)
+{
+    std::vector<boost::optional<SproutWitness>> witnesses;
+    uint256 anchor;
+    {
+        LOCK(cs_main);
+        anchor = pcoinsTip->GetBestAnchor(SPROUT); // As there are no inputs, ask the wallet for the best anchor
+    }
+    return perform_joinsplit(info, witnesses, anchor);
+}
+
+
+UniValue AsyncRPCOperation_mergetoaddress::perform_joinsplit(MergeToAddressJSInfo& info, std::vector<JSOutPoint>& outPoints)
+{
+    std::vector<boost::optional<SproutWitness>> witnesses;
+    uint256 anchor;
+    {
+        LOCK(cs_main);
+        pwalletMain->GetSproutNoteWitnesses(outPoints, witnesses, anchor);
+    }
+    return perform_joinsplit(info, witnesses, anchor);
+}
+
+UniValue AsyncRPCOperation_mergetoaddress::perform_joinsplit(
+    MergeToAddressJSInfo& info,
+    std::vector<boost::optional<SproutWitness>> witnesses,
+    uint256 anchor)
+{
+    if (anchor.IsNull()) {
+        throw std::runtime_error("anchor is null");
+    }
+
+    if (witnesses.size() != info.notes.size()) {
+        throw runtime_error("number of notes and witnesses do not match");
+    }
+
+    if (info.notes.size() != info.zkeys.size()) {
+        throw runtime_error("number of notes and spending keys do not match");
+    }
+
+    for (size_t i = 0; i < witnesses.size(); i++) {
+        if (!witnesses[i]) {
+            throw runtime_error("joinsplit input could not be found in tree");
+        }
+        info.vjsin.push_back(JSInput(*witnesses[i], info.notes[i], info.zkeys[i]));
+    }
+
+    // Make sure there are two inputs and two outputs
+    while (info.vjsin.size() < ZC_NUM_JS_INPUTS) {
+        info.vjsin.push_back(JSInput());
+    }
+
+    while (info.vjs
