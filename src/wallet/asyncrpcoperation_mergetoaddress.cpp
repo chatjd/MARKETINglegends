@@ -574,4 +574,140 @@ bool AsyncRPCOperation_mergetoaddress::main_impl()
             if (it != intermediates.end()) {
                 tree = it->second;
             } else if (!pcoinsTip->GetSproutAnchorAt(prevJoinSplit.anchor, tree)) {
-                throw JSONRPC
+                throw JSONRPCError(RPC_WALLET_ERROR, "Could not find previous JoinSplit anchor");
+            }
+
+            assert(changeOutputIndex != -1);
+            boost::optional<SproutWitness> changeWitness;
+            int n = 0;
+            for (const uint256& commitment : prevJoinSplit.commitments) {
+                tree.append(commitment);
+                previousCommitments.push_back(commitment);
+                if (!changeWitness && changeOutputIndex == n++) {
+                    changeWitness = tree.witness();
+                } else if (changeWitness) {
+                    changeWitness.get().append(commitment);
+                }
+            }
+            if (changeWitness) {
+                witnesses.push_back(changeWitness);
+            }
+            jsAnchor = tree.root();
+            intermediates.insert(std::make_pair(tree.root(), tree)); // chained js are interstitial (found in between block boundaries)
+
+            // Decrypt the change note's ciphertext to retrieve some data we need
+            ZCNoteDecryption decryptor(changeKey.receiving_key());
+            auto hSig = prevJoinSplit.h_sig(*pvidulumParams, tx_.joinSplitPubKey);
+            try {
+                SproutNotePlaintext plaintext = SproutNotePlaintext::decrypt(
+                    decryptor,
+                    prevJoinSplit.ciphertexts[changeOutputIndex],
+                    prevJoinSplit.ephemeralKey,
+                    hSig,
+                    (unsigned char)changeOutputIndex);
+
+                SproutNote note = plaintext.note(changeAddress);
+                info.notes.push_back(note);
+                info.zkeys.push_back(changeKey);
+
+                jsInputValue += plaintext.value();
+
+                LogPrint("zrpcunsafe", "%s: spending change (amount=%s)\n",
+                         getId(),
+                         FormatMoney(plaintext.value()));
+
+            } catch (const std::exception& e) {
+                throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Error decrypting output note of previous JoinSplit: %s", e.what()));
+            }
+        }
+
+
+        //
+        // Consume spendable non-change notes
+        //
+        std::vector<SproutNote> vInputNotes;
+        std::vector<SproutSpendingKey> vInputZKeys;
+        std::vector<JSOutPoint> vOutPoints;
+        std::vector<boost::optional<SproutWitness>> vInputWitnesses;
+        uint256 inputAnchor;
+        int numInputsNeeded = (jsChange > 0) ? 1 : 0;
+        while (numInputsNeeded++ < ZC_NUM_JS_INPUTS && zInputsDeque.size() > 0) {
+            MergeToAddressInputSproutNote t = zInputsDeque.front();
+            JSOutPoint jso = std::get<0>(t);
+            SproutNote note = std::get<1>(t);
+            CAmount noteFunds = std::get<2>(t);
+            SproutSpendingKey zkey = std::get<3>(t);
+            zInputsDeque.pop_front();
+
+            MergeToAddressWitnessAnchorData wad = jsopWitnessAnchorMap[jso.ToString()];
+            vInputWitnesses.push_back(wad.witness);
+            if (inputAnchor.IsNull()) {
+                inputAnchor = wad.anchor;
+            } else if (inputAnchor != wad.anchor) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "Selected input notes do not share the same anchor");
+            }
+
+            vOutPoints.push_back(jso);
+            vInputNotes.push_back(note);
+            vInputZKeys.push_back(zkey);
+
+            jsInputValue += noteFunds;
+
+            int wtxHeight = -1;
+            int wtxDepth = -1;
+            {
+                LOCK2(cs_main, pwalletMain->cs_wallet);
+                const CWalletTx& wtx = pwalletMain->mapWallet[jso.hash];
+                // Zero confirmation notes belong to transactions which have not yet been mined
+                if (mapBlockIndex.find(wtx.hashBlock) == mapBlockIndex.end()) {
+                    throw JSONRPCError(RPC_WALLET_ERROR, strprintf("mapBlockIndex does not contain block hash %s", wtx.hashBlock.ToString()));
+                }
+                wtxHeight = mapBlockIndex[wtx.hashBlock]->nHeight;
+                wtxDepth = wtx.GetDepthInMainChain();
+            }
+            LogPrint("zrpcunsafe", "%s: spending note (txid=%s, vjoinsplit=%d, ciphertext=%d, amount=%s, height=%d, confirmations=%d)\n",
+                     getId(),
+                     jso.hash.ToString().substr(0, 10),
+                     jso.js,
+                     int(jso.n), // uint8_t
+                     FormatMoney(noteFunds),
+                     wtxHeight,
+                     wtxDepth);
+        }
+
+        // Add history of previous commitments to witness
+        if (vInputNotes.size() > 0) {
+            if (vInputWitnesses.size() == 0) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "Could not find witness for note commitment");
+            }
+
+            for (auto& optionalWitness : vInputWitnesses) {
+                if (!optionalWitness) {
+                    throw JSONRPCError(RPC_WALLET_ERROR, "Witness for note commitment is null");
+                }
+                SproutWitness w = *optionalWitness; // could use .get();
+                if (jsChange > 0) {
+                    for (const uint256& commitment : previousCommitments) {
+                        w.append(commitment);
+                    }
+                    if (jsAnchor != w.root()) {
+                        throw JSONRPCError(RPC_WALLET_ERROR, "Witness for spendable note does not have same anchor as change input");
+                    }
+                }
+                witnesses.push_back(w);
+            }
+
+            // The jsAnchor is null if this JoinSplit is at the start of a new chain
+            if (jsAnchor.IsNull()) {
+                jsAnchor = inputAnchor;
+            }
+
+            // Add spendable notes as inputs
+            std::copy(vInputNotes.begin(), vInputNotes.end(), std::back_inserter(info.notes));
+            std::copy(vInputZKeys.begin(), vInputZKeys.end(), std::back_inserter(info.zkeys));
+        }
+
+        // Accumulate change
+        jsChange = jsInputValue + info.vpub_old;
+
+        // Set vpub_new in the last joinsplit (when there are no more notes t
