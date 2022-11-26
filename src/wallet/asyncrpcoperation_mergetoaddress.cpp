@@ -397,4 +397,181 @@ bool AsyncRPCOperation_mergetoaddress::main_impl()
             UniValue o(UniValue::VOBJ);
             o.push_back(Pair("txid", txid));
             set_result(o);
-  
+        } else {
+            // Test mode does not send the transaction to the network.
+            UniValue o(UniValue::VOBJ);
+            o.push_back(Pair("test", 1));
+            o.push_back(Pair("txid", tx_.GetHash().ToString()));
+            o.push_back(Pair("hex", signedtxn));
+            set_result(o);
+        }
+
+        return true;
+    }
+    /**
+     * END SCENARIO #0
+     */
+
+
+    /**
+     * SCENARIO #1
+     *
+     * taddrs -> taddr
+     *
+     * There are no zaddrs or joinsplits involved.
+     */
+    if (isPureTaddrOnlyTx) {
+        UniValue obj(UniValue::VOBJ);
+        obj.push_back(Pair("rawtxn", EncodeHexTx(tx_)));
+        sign_send_raw_transaction(obj);
+        return true;
+    }
+    /**
+     * END SCENARIO #1
+     */
+
+
+    // Prepare raw transaction to handle JoinSplits
+    CMutableTransaction mtx(tx_);
+    crypto_sign_keypair(joinSplitPubKey_.begin(), joinSplitPrivKey_);
+    mtx.joinSplitPubKey = joinSplitPubKey_;
+    tx_ = CTransaction(mtx);
+    std::string hexMemo = std::get<1>(recipient_);
+
+
+    /**
+     * SCENARIO #2
+     *
+     * taddrs -> zaddr
+     *
+     * We only need a single JoinSplit.
+     */
+    if (sproutNoteInputs_.empty() && isToZaddr_) {
+        // Create JoinSplit to target z-addr.
+        MergeToAddressJSInfo info;
+        info.vpub_old = sendAmount;
+        info.vpub_new = 0;
+
+        JSOutput jso = JSOutput(boost::get<libzcash::SproutPaymentAddress>(toPaymentAddress_), sendAmount);
+        if (hexMemo.size() > 0) {
+            jso.memo = get_memo_from_hex_string(hexMemo);
+        }
+        info.vjsout.push_back(jso);
+
+        UniValue obj(UniValue::VOBJ);
+        obj = perform_joinsplit(info);
+        sign_send_raw_transaction(obj);
+        return true;
+    }
+    /**
+     * END SCENARIO #2
+     */
+
+
+    // Copy zinputs to more flexible containers
+    std::deque<MergeToAddressInputSproutNote> zInputsDeque;
+    for (const auto& o : sproutNoteInputs_) {
+        zInputsDeque.push_back(o);
+    }
+
+    // When spending notes, take a snapshot of note witnesses and anchors as the treestate will
+    // change upon arrival of new blocks which contain joinsplit transactions.  This is likely
+    // to happen as creating a chained joinsplit transaction can take longer than the block interval.
+    {
+        LOCK2(cs_main, pwalletMain->cs_wallet);
+        for (auto t : sproutNoteInputs_) {
+            JSOutPoint jso = std::get<0>(t);
+            std::vector<JSOutPoint> vOutPoints = {jso};
+            uint256 inputAnchor;
+            std::vector<boost::optional<SproutWitness>> vInputWitnesses;
+            pwalletMain->GetSproutNoteWitnesses(vOutPoints, vInputWitnesses, inputAnchor);
+            jsopWitnessAnchorMap[jso.ToString()] = MergeToAddressWitnessAnchorData{vInputWitnesses[0], inputAnchor};
+        }
+    }
+
+    /**
+     * SCENARIO #3
+     *
+     * zaddrs -> zaddr
+     * taddrs ->
+     *
+     * zaddrs ->
+     * taddrs -> taddr
+     *
+     * Send to zaddr by chaining JoinSplits together and immediately consuming any change
+     * Send to taddr by creating dummy z outputs and accumulating value in a change note
+     * which is used to set vpub_new in the last chained joinsplit.
+     */
+    UniValue obj(UniValue::VOBJ);
+    CAmount jsChange = 0;          // this is updated after each joinsplit
+    int changeOutputIndex = -1;    // this is updated after each joinsplit if jsChange > 0
+    bool vpubOldProcessed = false; // updated when vpub_old for taddr inputs is set in first joinsplit
+    bool vpubNewProcessed = false; // updated when vpub_new for miner fee and taddr outputs is set in last joinsplit
+
+    // At this point, we are guaranteed to have at least one input note.
+    // Use address of first input note as the temporary change address.
+    SproutSpendingKey changeKey = std::get<3>(zInputsDeque.front());
+    SproutPaymentAddress changeAddress = changeKey.address();
+
+    CAmount vpubOldTarget = 0;
+    CAmount vpubNewTarget = 0;
+    if (isToTaddr_) {
+        vpubNewTarget = z_inputs_total;
+    } else {
+        if (utxoInputs_.empty()) {
+            vpubNewTarget = minersFee;
+        } else {
+            vpubOldTarget = t_inputs_total - minersFee;
+        }
+    }
+
+    // Keep track of treestate within this transaction
+    boost::unordered_map<uint256, SproutMerkleTree, CCoinsKeyHasher> intermediates;
+    std::vector<uint256> previousCommitments;
+
+    while (!vpubNewProcessed) {
+        MergeToAddressJSInfo info;
+        info.vpub_old = 0;
+        info.vpub_new = 0;
+
+        // Set vpub_old in the first joinsplit
+        if (!vpubOldProcessed) {
+            if (t_inputs_total < vpubOldTarget) {
+                throw JSONRPCError(RPC_WALLET_ERROR,
+                                   strprintf("Insufficient transparent funds for vpub_old %s (miners fee %s, taddr inputs %s)",
+                                             FormatMoney(vpubOldTarget), FormatMoney(minersFee), FormatMoney(t_inputs_total)));
+            }
+            info.vpub_old += vpubOldTarget; // funds flowing from public pool
+            vpubOldProcessed = true;
+        }
+
+        CAmount jsInputValue = 0;
+        uint256 jsAnchor;
+        std::vector<boost::optional<SproutWitness>> witnesses;
+
+        JSDescription prevJoinSplit;
+
+        // Keep track of previous JoinSplit and its commitments
+        if (tx_.vjoinsplit.size() > 0) {
+            prevJoinSplit = tx_.vjoinsplit.back();
+        }
+
+        // If there is no change, the chain has terminated so we can reset the tracked treestate.
+        if (jsChange == 0 && tx_.vjoinsplit.size() > 0) {
+            intermediates.clear();
+            previousCommitments.clear();
+        }
+
+        //
+        // Consume change as the first input of the JoinSplit.
+        //
+        if (jsChange > 0) {
+            LOCK2(cs_main, pwalletMain->cs_wallet);
+
+            // Update tree state with previous joinsplit
+            SproutMerkleTree tree;
+            auto it = intermediates.find(prevJoinSplit.anchor);
+            if (it != intermediates.end()) {
+                tree = it->second;
+            } else if (!pcoinsTip->GetSproutAnchorAt(prevJoinSplit.anchor, tree)) {
+                throw JSONRPC
