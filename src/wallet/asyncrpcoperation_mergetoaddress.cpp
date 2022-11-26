@@ -885,4 +885,155 @@ UniValue AsyncRPCOperation_mergetoaddress::perform_joinsplit(
         info.vjsin.push_back(JSInput());
     }
 
-    while (info.vjs
+    while (info.vjsout.size() < ZC_NUM_JS_OUTPUTS) {
+        info.vjsout.push_back(JSOutput());
+    }
+
+    if (info.vjsout.size() != ZC_NUM_JS_INPUTS || info.vjsin.size() != ZC_NUM_JS_OUTPUTS) {
+        throw runtime_error("unsupported joinsplit input/output counts");
+    }
+
+    CMutableTransaction mtx(tx_);
+
+    LogPrint("zrpcunsafe", "%s: creating joinsplit at index %d (vpub_old=%s, vpub_new=%s, in[0]=%s, in[1]=%s, out[0]=%s, out[1]=%s)\n",
+             getId(),
+             tx_.vjoinsplit.size(),
+             FormatMoney(info.vpub_old), FormatMoney(info.vpub_new),
+             FormatMoney(info.vjsin[0].note.value()), FormatMoney(info.vjsin[1].note.value()),
+             FormatMoney(info.vjsout[0].value), FormatMoney(info.vjsout[1].value));
+
+    // Generate the proof, this can take over a minute.
+    std::array<libzcash::JSInput, ZC_NUM_JS_INPUTS> inputs{info.vjsin[0], info.vjsin[1]};
+    std::array<libzcash::JSOutput, ZC_NUM_JS_OUTPUTS> outputs{info.vjsout[0], info.vjsout[1]};
+    std::array<uint64_t, ZC_NUM_JS_INPUTS> inputMap;
+    std::array<uint64_t, ZC_NUM_JS_OUTPUTS> outputMap;
+
+    uint256 esk; // payment disclosure - secret
+
+    JSDescription jsdesc = JSDescription::Randomized(
+        mtx.fOverwintered && (mtx.nVersion >= SAPLING_TX_VERSION),
+        *pvidulumParams,
+        joinSplitPubKey_,
+        anchor,
+        inputs,
+        outputs,
+        inputMap,
+        outputMap,
+        info.vpub_old,
+        info.vpub_new,
+        !this->testmode,
+        &esk); // parameter expects pointer to esk, so pass in address
+    {
+        auto verifier = libzcash::ProofVerifier::Strict();
+        if (!(jsdesc.Verify(*pvidulumParams, verifier, joinSplitPubKey_))) {
+            throw std::runtime_error("error verifying joinsplit");
+        }
+    }
+
+    mtx.vjoinsplit.push_back(jsdesc);
+
+    // Empty output script.
+    CScript scriptCode;
+    CTransaction signTx(mtx);
+    uint256 dataToBeSigned = SignatureHash(scriptCode, signTx, NOT_AN_INPUT, SIGHASH_ALL, 0, consensusBranchId_);
+
+    // Add the signature
+    if (!(crypto_sign_detached(&mtx.joinSplitSig[0], NULL,
+                               dataToBeSigned.begin(), 32,
+                               joinSplitPrivKey_) == 0)) {
+        throw std::runtime_error("crypto_sign_detached failed");
+    }
+
+    // Sanity check
+    if (!(crypto_sign_verify_detached(&mtx.joinSplitSig[0],
+                                      dataToBeSigned.begin(), 32,
+                                      mtx.joinSplitPubKey.begin()) == 0)) {
+        throw std::runtime_error("crypto_sign_verify_detached failed");
+    }
+
+    CTransaction rawTx(mtx);
+    tx_ = rawTx;
+
+    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
+    ss << rawTx;
+
+    std::string encryptedNote1;
+    std::string encryptedNote2;
+    {
+        CDataStream ss2(SER_NETWORK, PROTOCOL_VERSION);
+        ss2 << ((unsigned char)0x00);
+        ss2 << jsdesc.ephemeralKey;
+        ss2 << jsdesc.ciphertexts[0];
+        ss2 << jsdesc.h_sig(*pvidulumParams, joinSplitPubKey_);
+
+        encryptedNote1 = HexStr(ss2.begin(), ss2.end());
+    }
+    {
+        CDataStream ss2(SER_NETWORK, PROTOCOL_VERSION);
+        ss2 << ((unsigned char)0x01);
+        ss2 << jsdesc.ephemeralKey;
+        ss2 << jsdesc.ciphertexts[1];
+        ss2 << jsdesc.h_sig(*pvidulumParams, joinSplitPubKey_);
+
+        encryptedNote2 = HexStr(ss2.begin(), ss2.end());
+    }
+
+    UniValue arrInputMap(UniValue::VARR);
+    UniValue arrOutputMap(UniValue::VARR);
+    for (size_t i = 0; i < ZC_NUM_JS_INPUTS; i++) {
+        arrInputMap.push_back(static_cast<uint64_t>(inputMap[i]));
+    }
+    for (size_t i = 0; i < ZC_NUM_JS_OUTPUTS; i++) {
+        arrOutputMap.push_back(static_cast<uint64_t>(outputMap[i]));
+    }
+
+
+    // !!! Payment disclosure START
+    unsigned char buffer[32] = {0};
+    memcpy(&buffer[0], &joinSplitPrivKey_[0], 32); // private key in first half of 64 byte buffer
+    std::vector<unsigned char> vch(&buffer[0], &buffer[0] + 32);
+    uint256 joinSplitPrivKey = uint256(vch);
+    size_t js_index = tx_.vjoinsplit.size() - 1;
+    uint256 placeholder;
+    for (int i = 0; i < ZC_NUM_JS_OUTPUTS; i++) {
+        uint8_t mapped_index = outputMap[i];
+        // placeholder for txid will be filled in later when tx has been finalized and signed.
+        PaymentDisclosureKey pdKey = {placeholder, js_index, mapped_index};
+        JSOutput output = outputs[mapped_index];
+        libzcash::SproutPaymentAddress zaddr = output.addr; // randomized output
+        PaymentDisclosureInfo pdInfo = {PAYMENT_DISCLOSURE_VERSION_EXPERIMENTAL, esk, joinSplitPrivKey, zaddr};
+        paymentDisclosureData_.push_back(PaymentDisclosureKeyInfo(pdKey, pdInfo));
+
+        LogPrint("paymentdisclosure", "%s: Payment Disclosure: js=%d, n=%d, zaddr=%s\n", getId(), js_index, int(mapped_index), EncodePaymentAddress(zaddr));
+    }
+    // !!! Payment disclosure END
+
+    UniValue obj(UniValue::VOBJ);
+    obj.push_back(Pair("encryptednote1", encryptedNote1));
+    obj.push_back(Pair("encryptednote2", encryptedNote2));
+    obj.push_back(Pair("rawtxn", HexStr(ss.begin(), ss.end())));
+    obj.push_back(Pair("inputmap", arrInputMap));
+    obj.push_back(Pair("outputmap", arrOutputMap));
+    return obj;
+}
+
+std::array<unsigned char, ZC_MEMO_SIZE> AsyncRPCOperation_mergetoaddress::get_memo_from_hex_string(std::string s)
+{
+    std::array<unsigned char, ZC_MEMO_SIZE> memo = {{0x00}};
+
+    std::vector<unsigned char> rawMemo = ParseHex(s.c_str());
+
+    // If ParseHex comes across a non-hex char, it will stop but still return results so far.
+    size_t slen = s.length();
+    if (slen % 2 != 0 || (slen > 0 && rawMemo.size() != slen / 2)) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "Memo must be in hexadecimal format");
+    }
+
+    if (rawMemo.size() > ZC_MEMO_SIZE) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Memo size of %d is too big, maximum allowed is %d", rawMemo.size(), ZC_MEMO_SIZE));
+    }
+
+    // copy vector into boost array
+    int lenMemo = rawMemo.size();
+    for (int i = 0; i < ZC_MEMO_SIZE && i < lenMemo; i++) {
+        memo[i] = rawMemo[
