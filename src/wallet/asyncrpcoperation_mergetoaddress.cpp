@@ -1036,4 +1036,70 @@ std::array<unsigned char, ZC_MEMO_SIZE> AsyncRPCOperation_mergetoaddress::get_me
     // copy vector into boost array
     int lenMemo = rawMemo.size();
     for (int i = 0; i < ZC_MEMO_SIZE && i < lenMemo; i++) {
-        memo[i] = rawMemo[
+        memo[i] = rawMemo[i];
+    }
+    return memo;
+}
+
+/**
+ * Override getStatus() to append the operation's input parameters to the default status object.
+ */
+UniValue AsyncRPCOperation_mergetoaddress::getStatus() const
+{
+    UniValue v = AsyncRPCOperation::getStatus();
+    if (contextinfo_.isNull()) {
+        return v;
+    }
+
+    UniValue obj = v.get_obj();
+    obj.push_back(Pair("method", "z_mergetoaddress"));
+    obj.push_back(Pair("params", contextinfo_));
+    return obj;
+}
+
+/**
+ * Lock input utxos
+ */
+ void AsyncRPCOperation_mergetoaddress::lock_utxos() {
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+    for (auto utxo : utxoInputs_) {
+        pwalletMain->LockCoin(std::get<0>(utxo));
+    }
+}
+
+/**
+ * Unlock input utxos
+ */
+void AsyncRPCOperation_mergetoaddress::unlock_utxos() {
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+    for (auto utxo : utxoInputs_) {
+        pwalletMain->UnlockCoin(std::get<0>(utxo));
+    }
+}
+
+
+/**
+ * Lock input notes
+ */
+ void AsyncRPCOperation_mergetoaddress::lock_notes() {
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+    for (auto note : sproutNoteInputs_) {
+        pwalletMain->LockNote(std::get<0>(note));
+    }
+    for (auto note : saplingNoteInputs_) {
+        pwalletMain->LockNote(std::get<0>(note));
+    }
+}
+
+/**
+ * Unlock input notes
+ */
+void AsyncRPCOperation_mergetoaddress::unlock_notes() {
+    LOCK2(cs_main, pwalletMain->cs_wallet);
+    for (auto note : sproutNoteInputs_) {
+        pwalletMain->UnlockNote(std::get<0>(note));
+    }
+    for (auto note : saplingNoteInputs_) {
+        pwalletMain->UnlockNote(std::get<0>(note));
+    }
+}
