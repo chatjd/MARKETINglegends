@@ -412,4 +412,51 @@ bool CDB::Rewrite(const string& strFile, const char* pszSkip)
                 }
                 if (!fSuccess)
                     LogPrintf("CDB::Rewrite: Failed to rewrite database file %s\n", strFileRes);
-                return fS
+                return fSuccess;
+            }
+        }
+        MilliSleep(100);
+    }
+    return false;
+}
+
+
+void CDBEnv::Flush(bool fShutdown)
+{
+    int64_t nStart = GetTimeMillis();
+    // Flush log data to the actual data file on all files that are not in use
+    LogPrint("db", "CDBEnv::Flush: Flush(%s)%s\n", fShutdown ? "true" : "false", fDbEnvInit ? "" : " database not started");
+    if (!fDbEnvInit)
+        return;
+    {
+        LOCK(cs_db);
+        map<string, int>::iterator mi = mapFileUseCount.begin();
+        while (mi != mapFileUseCount.end()) {
+            string strFile = (*mi).first;
+            int nRefCount = (*mi).second;
+            LogPrint("db", "CDBEnv::Flush: Flushing %s (refcount = %d)...\n", strFile, nRefCount);
+            if (nRefCount == 0) {
+                // Move log data to the dat file
+                CloseDb(strFile);
+                LogPrint("db", "CDBEnv::Flush: %s checkpoint\n", strFile);
+                dbenv->txn_checkpoint(0, 0, 0);
+                LogPrint("db", "CDBEnv::Flush: %s detach\n", strFile);
+                if (!fMockDb)
+                    dbenv->lsn_reset(strFile.c_str(), 0);
+                LogPrint("db", "CDBEnv::Flush: %s closed\n", strFile);
+                mapFileUseCount.erase(mi++);
+            } else
+                mi++;
+        }
+        LogPrint("db", "CDBEnv::Flush: Flush(%s)%s took %15dms\n", fShutdown ? "true" : "false", fDbEnvInit ? "" : " database not started", GetTimeMillis() - nStart);
+        if (fShutdown) {
+            char** listp;
+            if (mapFileUseCount.empty()) {
+                dbenv->log_archive(&listp, DB_ARCH_REMOVE);
+                Close();
+                if (!fMockDb)
+                    boost::filesystem::remove_all(boost::filesystem::path(strPath) / "database");
+            }
+        }
+    }
+}
