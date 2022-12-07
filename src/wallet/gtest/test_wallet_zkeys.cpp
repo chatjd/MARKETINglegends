@@ -436,4 +436,62 @@ TEST(wallet_zkeys_tests, WriteCryptedSaplingZkeyDirectToDb) {
 
     // Generate a diversified address different to the default
     // If we can't get an early diversified address, we are very unlucky
-    libzcash::SaplingExtendedSpendingKey ext
+    libzcash::SaplingExtendedSpendingKey extsk;
+    EXPECT_TRUE(wallet.GetSaplingExtendedSpendingKey(address, extsk));
+    blob88 diversifier;
+    diversifier.begin()[0] = 10;
+    auto dpa = extsk.ToXFVK().Address(diversifier).get().second;
+
+    // Add diversified address to the wallet
+    auto ivk = extsk.expsk.full_viewing_key().in_viewing_key();
+    EXPECT_TRUE(wallet.AddSaplingIncomingViewingKey(ivk, dpa));
+
+    // encrypt wallet
+    SecureString strWalletPass;
+    strWalletPass.reserve(100);
+    strWalletPass = "hello";
+    ASSERT_TRUE(wallet.EncryptWallet(strWalletPass));
+
+    // adding a new key will fail as the wallet is locked
+    EXPECT_ANY_THROW(wallet.GenerateNewSaplingZKey());
+
+    // unlock wallet and then add
+    wallet.Unlock(strWalletPass);
+    auto address2 = wallet.GenerateNewSaplingZKey();
+
+    // Create a new wallet from the existing wallet path
+    CWallet wallet2("wallet_crypted_sapling.dat");
+    ASSERT_EQ(DB_LOAD_OK, wallet2.LoadWallet(fFirstRun));
+
+    // Confirm it's not the same as the other wallet
+    ASSERT_TRUE(&wallet != &wallet2);
+    ASSERT_TRUE(wallet2.HaveHDSeed());
+
+    // wallet should have three addresses
+    wallet2.GetSaplingPaymentAddresses(addrs);
+    ASSERT_EQ(3, addrs.size());
+
+    //check we have entries for our payment addresses
+    ASSERT_TRUE(addrs.count(address));
+    ASSERT_TRUE(addrs.count(address2));
+    ASSERT_TRUE(addrs.count(dpa));
+
+    // spending key is crypted, so we can't extract valid payment address
+    libzcash::SaplingExtendedSpendingKey keyOut;
+    EXPECT_FALSE(wallet2.GetSaplingExtendedSpendingKey(address, keyOut));
+    ASSERT_FALSE(address == keyOut.DefaultAddress());
+
+    // address -> ivk mapping is not crypted
+    libzcash::SaplingIncomingViewingKey ivkOut;
+    EXPECT_TRUE(wallet2.GetSaplingIncomingViewingKey(dpa, ivkOut));
+    EXPECT_EQ(ivk, ivkOut);
+
+    // unlock wallet to get spending keys and verify payment addresses
+    wallet2.Unlock(strWalletPass);
+
+    EXPECT_TRUE(wallet2.GetSaplingExtendedSpendingKey(address, keyOut));
+    ASSERT_EQ(address, keyOut.DefaultAddress());
+
+    EXPECT_TRUE(wallet2.GetSaplingExtendedSpendingKey(address2, keyOut));
+    ASSERT_EQ(address2, keyOut.DefaultAddress());
+}
