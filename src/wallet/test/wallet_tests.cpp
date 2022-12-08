@@ -213,4 +213,98 @@ BOOST_AUTO_TEST_CASE(coin_selection_tests)
         BOOST_CHECK( wallet.SelectCoinsMinConf(1 * CENT, 1, 1, vCoins, setCoinsRet, nValueRet));
         BOOST_CHECK_EQUAL(nValueRet, 1 * CENT); // we should get the exact amount
 
-        // run the 'mtgox' test (see http://blockexplorer.com/tx/29
+        // run the 'mtgox' test (see http://blockexplorer.com/tx/29a3efd3ef04f9153d47a990bd7b048a4b2d213daaa5fb8ed670fb85f13bdbcf)
+        // they tried to consolidate 10 50k coins into one 500k coin, and ended up with 50k in change
+        empty_wallet();
+        for (int i = 0; i < 20; i++)
+            add_coin(50000 * COIN);
+
+        BOOST_CHECK( wallet.SelectCoinsMinConf(500000 * COIN, 1, 1, vCoins, setCoinsRet, nValueRet));
+        BOOST_CHECK_EQUAL(nValueRet, 500000 * COIN); // we should get the exact amount
+        BOOST_CHECK_EQUAL(setCoinsRet.size(), 10U); // in ten coins
+
+        // if there's not enough in the smaller coins to make at least 1 cent change (0.5+0.6+0.7 < 1.0+1.0),
+        // we need to try finding an exact subset anyway
+
+        // sometimes it will fail, and so we use the next biggest coin:
+        empty_wallet();
+        add_coin(0.5 * CENT);
+        add_coin(0.6 * CENT);
+        add_coin(0.7 * CENT);
+        add_coin(1111 * CENT);
+        BOOST_CHECK( wallet.SelectCoinsMinConf(1 * CENT, 1, 1, vCoins, setCoinsRet, nValueRet));
+        BOOST_CHECK_EQUAL(nValueRet, 1111 * CENT); // we get the bigger coin
+        BOOST_CHECK_EQUAL(setCoinsRet.size(), 1U);
+
+        // but sometimes it's possible, and we use an exact subset (0.4 + 0.6 = 1.0)
+        empty_wallet();
+        add_coin(0.4 * CENT);
+        add_coin(0.6 * CENT);
+        add_coin(0.8 * CENT);
+        add_coin(1111 * CENT);
+        BOOST_CHECK( wallet.SelectCoinsMinConf(1 * CENT, 1, 1, vCoins, setCoinsRet, nValueRet));
+        BOOST_CHECK_EQUAL(nValueRet, 1 * CENT);   // we should get the exact amount
+        BOOST_CHECK_EQUAL(setCoinsRet.size(), 2U); // in two coins 0.4+0.6
+
+        // test avoiding sub-cent change
+        empty_wallet();
+        add_coin(0.0005 * COIN);
+        add_coin(0.01 * COIN);
+        add_coin(1 * COIN);
+
+        // trying to make 1.0001 from these three coins
+        BOOST_CHECK( wallet.SelectCoinsMinConf(1.0001 * COIN, 1, 1, vCoins, setCoinsRet, nValueRet));
+        BOOST_CHECK_EQUAL(nValueRet, 1.0105 * COIN);   // we should get all coins
+        BOOST_CHECK_EQUAL(setCoinsRet.size(), 3U);
+
+        // but if we try to make 0.999, we should take the bigger of the two small coins to avoid sub-cent change
+        BOOST_CHECK( wallet.SelectCoinsMinConf(0.999 * COIN, 1, 1, vCoins, setCoinsRet, nValueRet));
+        BOOST_CHECK_EQUAL(nValueRet, 1.01 * COIN);   // we should get 1 + 0.01
+        BOOST_CHECK_EQUAL(setCoinsRet.size(), 2U);
+
+        // test randomness
+        {
+            empty_wallet();
+            for (int i2 = 0; i2 < 100; i2++)
+                add_coin(COIN);
+
+            // picking 50 from 100 coins doesn't depend on the shuffle,
+            // but does depend on randomness in the stochastic approximation code
+            BOOST_CHECK(wallet.SelectCoinsMinConf(50 * COIN, 1, 6, vCoins, setCoinsRet , nValueRet));
+            BOOST_CHECK(wallet.SelectCoinsMinConf(50 * COIN, 1, 6, vCoins, setCoinsRet2, nValueRet));
+            BOOST_CHECK(!equal_sets(setCoinsRet, setCoinsRet2));
+
+            int fails = 0;
+            for (int i = 0; i < RANDOM_REPEATS; i++)
+            {
+                // selecting 1 from 100 identical coins depends on the shuffle; this test will fail 1% of the time
+                // run the test RANDOM_REPEATS times and only complain if all of them fail
+                BOOST_CHECK(wallet.SelectCoinsMinConf(COIN, 1, 6, vCoins, setCoinsRet , nValueRet));
+                BOOST_CHECK(wallet.SelectCoinsMinConf(COIN, 1, 6, vCoins, setCoinsRet2, nValueRet));
+                if (equal_sets(setCoinsRet, setCoinsRet2))
+                    fails++;
+            }
+            BOOST_CHECK_NE(fails, RANDOM_REPEATS);
+
+            // add 75 cents in small change.  not enough to make 90 cents,
+            // then try making 90 cents.  there are multiple competing "smallest bigger" coins,
+            // one of which should be picked at random
+            add_coin( 5*CENT); add_coin(10*CENT); add_coin(15*CENT); add_coin(20*CENT); add_coin(25*CENT);
+
+            fails = 0;
+            for (int i = 0; i < RANDOM_REPEATS; i++)
+            {
+                // selecting 1 from 100 identical coins depends on the shuffle; this test will fail 1% of the time
+                // run the test RANDOM_REPEATS times and only complain if all of them fail
+                BOOST_CHECK(wallet.SelectCoinsMinConf(90*CENT, 1, 6, vCoins, setCoinsRet , nValueRet));
+                BOOST_CHECK(wallet.SelectCoinsMinConf(90*CENT, 1, 6, vCoins, setCoinsRet2, nValueRet));
+                if (equal_sets(setCoinsRet, setCoinsRet2))
+                    fails++;
+            }
+            BOOST_CHECK_NE(fails, RANDOM_REPEATS);
+        }
+    }
+    empty_wallet();
+}
+
+BOOST_AUTO_TEST_SUITE_END()
