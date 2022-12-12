@@ -243,4 +243,171 @@ CPubKey CWallet::GenerateNewKey()
     int64_t nCreationTime = GetTime();
     mapKeyMetadata[pubkey.GetID()] = CKeyMetadata(nCreationTime);
     if (!nTimeFirstKey || nCreationTime < nTimeFirstKey)
-        nTimeFirstKey = nCre
+        nTimeFirstKey = nCreationTime;
+
+    if (!AddKeyPubKey(secret, pubkey))
+        throw std::runtime_error("CWallet::GenerateNewKey(): AddKey failed");
+    return pubkey;
+}
+
+bool CWallet::AddKeyPubKey(const CKey& secret, const CPubKey &pubkey)
+{
+    AssertLockHeld(cs_wallet); // mapKeyMetadata
+    if (!CCryptoKeyStore::AddKeyPubKey(secret, pubkey))
+        return false;
+
+    // check if we need to remove from watch-only
+    CScript script;
+    script = GetScriptForDestination(pubkey.GetID());
+    if (HaveWatchOnly(script))
+        RemoveWatchOnly(script);
+
+    if (!fFileBacked)
+        return true;
+    if (!IsCrypted()) {
+        return CWalletDB(strWalletFile).WriteKey(pubkey,
+                                                 secret.GetPrivKey(),
+                                                 mapKeyMetadata[pubkey.GetID()]);
+    }
+    return true;
+}
+
+bool CWallet::AddCryptedKey(const CPubKey &vchPubKey,
+                            const vector<unsigned char> &vchCryptedSecret)
+{
+
+    if (!CCryptoKeyStore::AddCryptedKey(vchPubKey, vchCryptedSecret))
+        return false;
+    if (!fFileBacked)
+        return true;
+    {
+        LOCK(cs_wallet);
+        if (pwalletdbEncryption)
+            return pwalletdbEncryption->WriteCryptedKey(vchPubKey,
+                                                        vchCryptedSecret,
+                                                        mapKeyMetadata[vchPubKey.GetID()]);
+        else
+            return CWalletDB(strWalletFile).WriteCryptedKey(vchPubKey,
+                                                            vchCryptedSecret,
+                                                            mapKeyMetadata[vchPubKey.GetID()]);
+    }
+    return false;
+}
+
+
+bool CWallet::AddCryptedSproutSpendingKey(
+    const libzcash::SproutPaymentAddress &address,
+    const libzcash::ReceivingKey &rk,
+    const std::vector<unsigned char> &vchCryptedSecret)
+{
+    if (!CCryptoKeyStore::AddCryptedSproutSpendingKey(address, rk, vchCryptedSecret))
+        return false;
+    if (!fFileBacked)
+        return true;
+    {
+        LOCK(cs_wallet);
+        if (pwalletdbEncryption) {
+            return pwalletdbEncryption->WriteCryptedZKey(address,
+                                                         rk,
+                                                         vchCryptedSecret,
+                                                         mapSproutZKeyMetadata[address]);
+        } else {
+            return CWalletDB(strWalletFile).WriteCryptedZKey(address,
+                                                             rk,
+                                                             vchCryptedSecret,
+                                                             mapSproutZKeyMetadata[address]);
+        }
+    }
+    return false;
+}
+
+bool CWallet::AddCryptedSaplingSpendingKey(const libzcash::SaplingExtendedFullViewingKey &extfvk,
+                                           const std::vector<unsigned char> &vchCryptedSecret,
+                                           const libzcash::SaplingPaymentAddress &defaultAddr)
+{
+    if (!CCryptoKeyStore::AddCryptedSaplingSpendingKey(extfvk, vchCryptedSecret, defaultAddr))
+        return false;
+    if (!fFileBacked)
+        return true;
+    {
+        LOCK(cs_wallet);
+        if (pwalletdbEncryption) {
+            return pwalletdbEncryption->WriteCryptedSaplingZKey(extfvk,
+                                                         vchCryptedSecret,
+                                                         mapSaplingZKeyMetadata[extfvk.fvk.in_viewing_key()]);
+        } else {
+            return CWalletDB(strWalletFile).WriteCryptedSaplingZKey(extfvk,
+                                                         vchCryptedSecret,
+                                                         mapSaplingZKeyMetadata[extfvk.fvk.in_viewing_key()]);
+        }
+    }
+    return false;
+}
+
+bool CWallet::LoadKeyMetadata(const CPubKey &pubkey, const CKeyMetadata &meta)
+{
+    AssertLockHeld(cs_wallet); // mapKeyMetadata
+    if (meta.nCreateTime && (!nTimeFirstKey || meta.nCreateTime < nTimeFirstKey))
+        nTimeFirstKey = meta.nCreateTime;
+
+    mapKeyMetadata[pubkey.GetID()] = meta;
+    return true;
+}
+
+bool CWallet::LoadZKeyMetadata(const SproutPaymentAddress &addr, const CKeyMetadata &meta)
+{
+    AssertLockHeld(cs_wallet); // mapSproutZKeyMetadata
+    mapSproutZKeyMetadata[addr] = meta;
+    return true;
+}
+
+bool CWallet::LoadCryptedKey(const CPubKey &vchPubKey, const std::vector<unsigned char> &vchCryptedSecret)
+{
+    return CCryptoKeyStore::AddCryptedKey(vchPubKey, vchCryptedSecret);
+}
+
+bool CWallet::LoadCryptedZKey(const libzcash::SproutPaymentAddress &addr, const libzcash::ReceivingKey &rk, const std::vector<unsigned char> &vchCryptedSecret)
+{
+    return CCryptoKeyStore::AddCryptedSproutSpendingKey(addr, rk, vchCryptedSecret);
+}
+
+bool CWallet::LoadCryptedSaplingZKey(
+    const libzcash::SaplingExtendedFullViewingKey &extfvk,
+    const std::vector<unsigned char> &vchCryptedSecret)
+{
+     return CCryptoKeyStore::AddCryptedSaplingSpendingKey(extfvk, vchCryptedSecret, extfvk.DefaultAddress());
+}
+
+bool CWallet::LoadSaplingZKeyMetadata(const libzcash::SaplingIncomingViewingKey &ivk, const CKeyMetadata &meta)
+{
+    AssertLockHeld(cs_wallet); // mapSaplingZKeyMetadata
+    mapSaplingZKeyMetadata[ivk] = meta;
+    return true;
+}
+
+bool CWallet::LoadSaplingZKey(const libzcash::SaplingExtendedSpendingKey &key)
+{
+    return CCryptoKeyStore::AddSaplingSpendingKey(key, key.DefaultAddress());
+}
+
+bool CWallet::LoadSaplingPaymentAddress(
+    const libzcash::SaplingPaymentAddress &addr,
+    const libzcash::SaplingIncomingViewingKey &ivk)
+{
+    return CCryptoKeyStore::AddSaplingIncomingViewingKey(ivk, addr);
+}
+
+bool CWallet::LoadZKey(const libzcash::SproutSpendingKey &key)
+{
+    return CCryptoKeyStore::AddSproutSpendingKey(key);
+}
+
+bool CWallet::AddSproutViewingKey(const libzcash::SproutViewingKey &vk)
+{
+    if (!CCryptoKeyStore::AddSproutViewingKey(vk)) {
+        return false;
+    }
+    nTimeFirstKey = 1; // No birthday information for viewing keys.
+    if (!fFileBacked) {
+        return true;
+   
