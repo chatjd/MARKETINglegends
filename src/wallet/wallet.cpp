@@ -579,4 +579,168 @@ std::set<std::pair<libzcash::PaymentAddress, uint256>> CWallet::GetNullifiersFor
         const std::set<libzcash::PaymentAddress> & addresses)
 {
     std::set<std::pair<libzcash::PaymentAddress, uint256>> nullifierSet;
-    // Sapling ivk -> list of
+    // Sapling ivk -> list of addrs map
+    // (There may be more than one diversified address for a given ivk.)
+    std::map<libzcash::SaplingIncomingViewingKey, std::vector<libzcash::SaplingPaymentAddress>> ivkMap;
+    for (const auto & addr : addresses) {
+        auto saplingAddr = boost::get<libzcash::SaplingPaymentAddress>(&addr);
+        if (saplingAddr != nullptr) {
+            libzcash::SaplingIncomingViewingKey ivk;
+            this->GetSaplingIncomingViewingKey(*saplingAddr, ivk);
+            ivkMap[ivk].push_back(*saplingAddr);
+        }
+    }
+    for (const auto & txPair : mapWallet) {
+        // Sprout
+        for (const auto & noteDataPair : txPair.second.mapSproutNoteData) {
+            auto & noteData = noteDataPair.second;
+            auto & nullifier = noteData.nullifier;
+            auto & address = noteData.address;
+            if (nullifier && addresses.count(address)) {
+                nullifierSet.insert(std::make_pair(address, nullifier.get()));
+            }
+        }
+        // Sapling
+        for (const auto & noteDataPair : txPair.second.mapSaplingNoteData) {
+            auto & noteData = noteDataPair.second;
+            auto & nullifier = noteData.nullifier;
+            auto & ivk = noteData.ivk;
+            if (nullifier && ivkMap.count(ivk)) {
+                for (const auto & addr : ivkMap[ivk]) {
+                    nullifierSet.insert(std::make_pair(addr, nullifier.get()));
+                }
+            }
+        }
+    }
+    return nullifierSet;
+}
+
+bool CWallet::IsNoteSproutChange(
+        const std::set<std::pair<libzcash::PaymentAddress, uint256>> & nullifierSet,
+        const PaymentAddress & address,
+        const JSOutPoint & jsop)
+{
+    // A Note is marked as "change" if the address that received it
+    // also spent Notes in the same transaction. This will catch,
+    // for instance:
+    // - Change created by spending fractions of Notes (because
+    //   z_sendmany sends change to the originating z-address).
+    // - "Chaining Notes" used to connect JoinSplits together.
+    // - Notes created by consolidation transactions (e.g. using
+    //   z_mergetoaddress).
+    // - Notes sent from one address to itself.
+    for (const JSDescription & jsd : mapWallet[jsop.hash].vjoinsplit) {
+        for (const uint256 & nullifier : jsd.nullifiers) {
+            if (nullifierSet.count(std::make_pair(address, nullifier))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool CWallet::IsNoteSaplingChange(const std::set<std::pair<libzcash::PaymentAddress, uint256>> & nullifierSet,
+        const libzcash::PaymentAddress & address,
+        const SaplingOutPoint & op)
+{
+    // A Note is marked as "change" if the address that received it
+    // also spent Notes in the same transaction. This will catch,
+    // for instance:
+    // - Change created by spending fractions of Notes (because
+    //   z_sendmany sends change to the originating z-address).
+    // - Notes created by consolidation transactions (e.g. using
+    //   z_mergetoaddress).
+    // - Notes sent from one address to itself.
+    for (const SpendDescription &spend : mapWallet[op.hash].vShieldedSpend) {
+        if (nullifierSet.count(std::make_pair(address, spend.nullifier))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CWallet::SetMinVersion(enum WalletFeature nVersion, CWalletDB* pwalletdbIn, bool fExplicit)
+{
+    LOCK(cs_wallet); // nWalletVersion
+    if (nWalletVersion >= nVersion)
+        return true;
+
+    // when doing an explicit upgrade, if we pass the max version permitted, upgrade all the way
+    if (fExplicit && nVersion > nWalletMaxVersion)
+            nVersion = FEATURE_LATEST;
+
+    nWalletVersion = nVersion;
+
+    if (nVersion > nWalletMaxVersion)
+        nWalletMaxVersion = nVersion;
+
+    if (fFileBacked)
+    {
+        CWalletDB* pwalletdb = pwalletdbIn ? pwalletdbIn : new CWalletDB(strWalletFile);
+        if (nWalletVersion > 40000)
+            pwalletdb->WriteMinVersion(nWalletVersion);
+        if (!pwalletdbIn)
+            delete pwalletdb;
+    }
+
+    return true;
+}
+
+bool CWallet::SetMaxVersion(int nVersion)
+{
+    LOCK(cs_wallet); // nWalletVersion, nWalletMaxVersion
+    // cannot downgrade below current version
+    if (nWalletVersion > nVersion)
+        return false;
+
+    nWalletMaxVersion = nVersion;
+
+    return true;
+}
+
+set<uint256> CWallet::GetConflicts(const uint256& txid) const
+{
+    set<uint256> result;
+    AssertLockHeld(cs_wallet);
+
+    std::map<uint256, CWalletTx>::const_iterator it = mapWallet.find(txid);
+    if (it == mapWallet.end())
+        return result;
+    const CWalletTx& wtx = it->second;
+
+    std::pair<TxSpends::const_iterator, TxSpends::const_iterator> range;
+
+    BOOST_FOREACH(const CTxIn& txin, wtx.vin)
+    {
+        if (mapTxSpends.count(txin.prevout) <= 1)
+            continue;  // No conflict if zero or one spends
+        range = mapTxSpends.equal_range(txin.prevout);
+        for (TxSpends::const_iterator it = range.first; it != range.second; ++it)
+            result.insert(it->second);
+    }
+
+    std::pair<TxNullifiers::const_iterator, TxNullifiers::const_iterator> range_n;
+
+    for (const JSDescription& jsdesc : wtx.vjoinsplit) {
+        for (const uint256& nullifier : jsdesc.nullifiers) {
+            if (mapTxSproutNullifiers.count(nullifier) <= 1) {
+                continue;  // No conflict if zero or one spends
+            }
+            range_n = mapTxSproutNullifiers.equal_range(nullifier);
+            for (TxNullifiers::const_iterator it = range_n.first; it != range_n.second; ++it) {
+                result.insert(it->second);
+            }
+        }
+    }
+
+    std::pair<TxNullifiers::const_iterator, TxNullifiers::const_iterator> range_o;
+
+    for (const SpendDescription &spend : wtx.vShieldedSpend) {
+        uint256 nullifier = spend.nullifier;
+        if (mapTxSaplingNullifiers.count(nullifier) <= 1) {
+            continue;  // No conflict if zero or one spends
+        }
+        range_o = mapTxSaplingNullifiers.equal_range(nullifier);
+        for (TxNullifiers::const_iterator it = range_o.first; it != range_o.second; ++it) {
+            result.insert(it->second);
+        
