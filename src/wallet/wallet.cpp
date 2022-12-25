@@ -1069,4 +1069,139 @@ void WitnessNoteIfMine(std::map<OutPoint, NoteData>& noteDataMap, int indexHeigh
             // witness cache state after every block increment or
             // decrement, but the block index itself is written in
             // batches. So if the node crashes in between these two
-            // operations, it i
+            // operations, it is possible for IncrementNoteWitnesses
+            // to be called again on previously-cached blocks. This
+            // doesn't affect existing cached notes because of the
+            // NoteData::witnessHeight checks. See #1378 for details.
+            LogPrintf("Inconsistent witness cache state found for %s\n- Cache size: %d\n- Top (height %d): %s\n- New (height %d): %s\n",
+                        key.ToString(), nd->witnesses.size(),
+                        nd->witnessHeight,
+                        nd->witnesses.front().root().GetHex(),
+                        indexHeight,
+                        witness.root().GetHex());
+            nd->witnesses.clear();
+        }
+        nd->witnesses.push_front(witness);
+        // Set height to one less than pindex so it gets incremented
+        nd->witnessHeight = indexHeight - 1;
+        // Check the validity of the cache
+        assert(nWitnessCacheSize >= nd->witnesses.size());
+    }
+}
+
+
+template<typename NoteDataMap>
+void UpdateWitnessHeights(NoteDataMap& noteDataMap, int indexHeight, int64_t nWitnessCacheSize)
+{
+    for (auto& item : noteDataMap) {
+        auto* nd = &(item.second);
+        if (nd->witnessHeight < indexHeight) {
+            nd->witnessHeight = indexHeight;
+            // Check the validity of the cache
+            // See comment in CopyPreviousWitnesses about validity.
+            assert(nWitnessCacheSize >= nd->witnesses.size());
+        }
+    }
+}
+
+void CWallet::IncrementNoteWitnesses(const CBlockIndex* pindex,
+                                     const CBlock* pblockIn,
+                                     SproutMerkleTree& sproutTree,
+                                     SaplingMerkleTree& saplingTree)
+{
+    LOCK(cs_wallet);
+    for (std::pair<const uint256, CWalletTx>& wtxItem : mapWallet) {
+       ::CopyPreviousWitnesses(wtxItem.second.mapSproutNoteData, pindex->nHeight, nWitnessCacheSize);
+       ::CopyPreviousWitnesses(wtxItem.second.mapSaplingNoteData, pindex->nHeight, nWitnessCacheSize);
+    }
+
+    if (nWitnessCacheSize < WITNESS_CACHE_SIZE) {
+        nWitnessCacheSize += 1;
+    }
+
+    const CBlock* pblock {pblockIn};
+    CBlock block;
+    if (!pblock) {
+        ReadBlockFromDisk(block, pindex);
+        pblock = &block;
+    }
+
+    for (const CTransaction& tx : pblock->vtx) {
+        auto hash = tx.GetHash();
+        bool txIsOurs = mapWallet.count(hash);
+        // Sprout
+        for (size_t i = 0; i < tx.vjoinsplit.size(); i++) {
+            const JSDescription& jsdesc = tx.vjoinsplit[i];
+            for (uint8_t j = 0; j < jsdesc.commitments.size(); j++) {
+                const uint256& note_commitment = jsdesc.commitments[j];
+                sproutTree.append(note_commitment);
+
+                // Increment existing witnesses
+                for (std::pair<const uint256, CWalletTx>& wtxItem : mapWallet) {
+                    ::AppendNoteCommitment(wtxItem.second.mapSproutNoteData, pindex->nHeight, nWitnessCacheSize, note_commitment);
+                }
+
+                // If this is our note, witness it
+                if (txIsOurs) {
+                    JSOutPoint jsoutpt {hash, i, j};
+                    ::WitnessNoteIfMine(mapWallet[hash].mapSproutNoteData, pindex->nHeight, nWitnessCacheSize, jsoutpt, sproutTree.witness());
+                }
+            }
+        }
+        // Sapling
+        for (uint32_t i = 0; i < tx.vShieldedOutput.size(); i++) {
+            const uint256& note_commitment = tx.vShieldedOutput[i].cm;
+            saplingTree.append(note_commitment);
+
+            // Increment existing witnesses
+            for (std::pair<const uint256, CWalletTx>& wtxItem : mapWallet) {
+                ::AppendNoteCommitment(wtxItem.second.mapSaplingNoteData, pindex->nHeight, nWitnessCacheSize, note_commitment);
+            }
+
+            // If this is our note, witness it
+            if (txIsOurs) {
+                SaplingOutPoint outPoint {hash, i};
+                ::WitnessNoteIfMine(mapWallet[hash].mapSaplingNoteData, pindex->nHeight, nWitnessCacheSize, outPoint, saplingTree.witness());
+            }
+        }
+    }
+
+    // Update witness heights
+    for (std::pair<const uint256, CWalletTx>& wtxItem : mapWallet) {
+        ::UpdateWitnessHeights(wtxItem.second.mapSproutNoteData, pindex->nHeight, nWitnessCacheSize);
+        ::UpdateWitnessHeights(wtxItem.second.mapSaplingNoteData, pindex->nHeight, nWitnessCacheSize);
+    }
+
+    // For performance reasons, we write out the witness cache in
+    // CWallet::SetBestChain() (which also ensures that overall consistency
+    // of the wallet.dat is maintained).
+}
+
+template<typename NoteDataMap>
+void DecrementNoteWitnesses(NoteDataMap& noteDataMap, int indexHeight, int64_t nWitnessCacheSize)
+{
+    for (auto& item : noteDataMap) {
+        auto* nd = &(item.second);
+        // Only decrement witnesses that are not above the current height
+        if (nd->witnessHeight <= indexHeight) {
+            // Check the validity of the cache
+            // See comment below (this would be invalid if there were a
+            // prior decrement).
+            assert(nWitnessCacheSize >= nd->witnesses.size());
+            // Witnesses being decremented should always be either -1
+            // (never incremented or decremented) or equal to the height
+            // of the block being removed (indexHeight)
+            assert((nd->witnessHeight == -1) || (nd->witnessHeight == indexHeight));
+            if (nd->witnesses.size() > 0) {
+                nd->witnesses.pop_front();
+            }
+            // indexHeight is the height of the block being removed, so 
+            // the new witness cache height is one below it.
+            nd->witnessHeight = indexHeight - 1;
+        }
+        // Check the validity of the cache
+        // Technically if there are notes witnessed above the current
+        // height, their cache will now be invalid (relative to the new
+        // value of nWitnessCacheSize). However, this would only occur
+        // during a reindex, and by the time the reindex reaches the tip
+        // of the chai
