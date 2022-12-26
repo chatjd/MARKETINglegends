@@ -1383,4 +1383,157 @@ bool CWallet::UpdateNullifierNoteMap()
             return false;
 
         ZCNoteDecryption dec;
-        for (std::pair<const uint256, CWalletTx>& wtxIte
+        for (std::pair<const uint256, CWalletTx>& wtxItem : mapWallet) {
+            for (mapSproutNoteData_t::value_type& item : wtxItem.second.mapSproutNoteData) {
+                if (!item.second.nullifier) {
+                    if (GetNoteDecryptor(item.second.address, dec)) {
+                        auto i = item.first.js;
+                        auto hSig = wtxItem.second.vjoinsplit[i].h_sig(
+                            *pvidulumParams, wtxItem.second.joinSplitPubKey);
+                        item.second.nullifier = GetSproutNoteNullifier(
+                            wtxItem.second.vjoinsplit[i],
+                            item.second.address,
+                            dec,
+                            hSig,
+                            item.first.n);
+                    }
+                }
+            }
+
+            // TODO: Sapling.  This method is only called from RPC walletpassphrase, which is currently unsupported
+            // as RPC encryptwallet is hidden behind two flags: -developerencryptwallet -experimentalfeatures
+
+            UpdateNullifierNoteMapWithTx(wtxItem.second);
+        }
+    }
+    return true;
+}
+
+/**
+ * Update mapSproutNullifiersToNotes and mapSaplingNullifiersToNotes
+ * with the cached nullifiers in this tx.
+ */
+void CWallet::UpdateNullifierNoteMapWithTx(const CWalletTx& wtx)
+{
+    {
+        LOCK(cs_wallet);
+        for (const mapSproutNoteData_t::value_type& item : wtx.mapSproutNoteData) {
+            if (item.second.nullifier) {
+                mapSproutNullifiersToNotes[*item.second.nullifier] = item.first;
+            }
+        }
+
+        for (const mapSaplingNoteData_t::value_type& item : wtx.mapSaplingNoteData) {
+            if (item.second.nullifier) {
+                mapSaplingNullifiersToNotes[*item.second.nullifier] = item.first;
+            }
+        }
+    }
+}
+
+/**
+ * Update mapSaplingNullifiersToNotes, computing the nullifier from a cached witness if necessary.
+ */
+void CWallet::UpdateSaplingNullifierNoteMapWithTx(CWalletTx& wtx) {
+    LOCK(cs_wallet);
+
+    for (mapSaplingNoteData_t::value_type &item : wtx.mapSaplingNoteData) {
+        SaplingOutPoint op = item.first;
+        SaplingNoteData nd = item.second;
+
+        if (nd.witnesses.empty()) {
+            // If there are no witnesses, erase the nullifier and associated mapping.
+            if (item.second.nullifier) {
+                mapSaplingNullifiersToNotes.erase(item.second.nullifier.get());
+            }
+            item.second.nullifier = boost::none;
+        }
+        else {
+            uint64_t position = nd.witnesses.front().position();
+            SaplingFullViewingKey fvk = mapSaplingFullViewingKeys.at(nd.ivk);
+            OutputDescription output = wtx.vShieldedOutput[op.n];
+            auto optPlaintext = SaplingNotePlaintext::decrypt(output.encCiphertext, nd.ivk, output.ephemeralKey, output.cm);
+            if (!optPlaintext) {
+                // An item in mapSaplingNoteData must have already been successfully decrypted,
+                // otherwise the item would not exist in the first place.
+                assert(false);
+            }
+            auto optNote = optPlaintext.get().note(nd.ivk);
+            if (!optNote) {
+                assert(false);
+            }
+            auto optNullifier = optNote.get().nullifier(fvk, position);
+            if (!optNullifier) {
+                // This should not happen.  If it does, maybe the position has been corrupted or miscalculated?
+                assert(false);
+            }
+            uint256 nullifier = optNullifier.get();
+            mapSaplingNullifiersToNotes[nullifier] = op;
+            item.second.nullifier = nullifier;
+        }
+    }
+}
+
+/**
+ * Iterate over transactions in a block and update the cached Sapling nullifiers
+ * for transactions which belong to the wallet.
+ */
+void CWallet::UpdateSaplingNullifierNoteMapForBlock(const CBlock *pblock) {
+    LOCK(cs_wallet);
+
+    for (const CTransaction& tx : pblock->vtx) {
+        auto hash = tx.GetHash();
+        bool txIsOurs = mapWallet.count(hash);
+        if (txIsOurs) {
+            UpdateSaplingNullifierNoteMapWithTx(mapWallet[hash]);
+        }
+    }
+}
+
+bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFromLoadWallet, CWalletDB* pwalletdb)
+{
+    uint256 hash = wtxIn.GetHash();
+
+    if (fFromLoadWallet)
+    {
+        mapWallet[hash] = wtxIn;
+        mapWallet[hash].BindWallet(this);
+        UpdateNullifierNoteMapWithTx(mapWallet[hash]);
+        AddToSpends(hash);
+    }
+    else
+    {
+        LOCK(cs_wallet);
+        // Inserts only if not already there, returns tx inserted or tx found
+        pair<map<uint256, CWalletTx>::iterator, bool> ret = mapWallet.insert(make_pair(hash, wtxIn));
+        CWalletTx& wtx = (*ret.first).second;
+        wtx.BindWallet(this);
+        UpdateNullifierNoteMapWithTx(wtx);
+        bool fInsertedNew = ret.second;
+        if (fInsertedNew)
+        {
+            wtx.nTimeReceived = GetAdjustedTime();
+            wtx.nOrderPos = IncOrderPosNext(pwalletdb);
+
+            wtx.nTimeSmart = wtx.nTimeReceived;
+            if (!wtxIn.hashBlock.IsNull())
+            {
+                if (mapBlockIndex.count(wtxIn.hashBlock))
+                {
+                    int64_t latestNow = wtx.nTimeReceived;
+                    int64_t latestEntry = 0;
+                    {
+                        // Tolerate times up to the last timestamp in the wallet not more than 5 minutes into the future
+                        int64_t latestTolerated = latestNow + 300;
+                        std::list<CAccountingEntry> acentries;
+                        TxItems txOrdered = OrderedTxItems(acentries);
+                        for (TxItems::reverse_iterator it = txOrdered.rbegin(); it != txOrdered.rend(); ++it)
+                        {
+                            CWalletTx *const pwtx = (*it).second.first;
+                            if (pwtx == &wtx)
+                                continue;
+                            CAccountingEntry *const pacentry = (*it).second.second;
+                            int64_t nSmartTime;
+                            if (pwtx)
+                            {
+                                nS
