@@ -1689,4 +1689,167 @@ bool CWallet::AddToWalletIfInvolvingMe(const CTransaction& tx, const CBlock* pbl
                 wtx.SetMerkleBranch(*pblock);
 
             // Do not flush the wallet here for performance reasons
-            // this is safe, as in case of a crash, we rescan the ne
+            // this is safe, as in case of a crash, we rescan the necessary blocks on startup through our SetBestChain-mechanism
+            CWalletDB walletdb(strWalletFile, "r+", false);
+
+            return AddToWallet(wtx, false, &walletdb);
+        }
+    }
+    return false;
+}
+
+void CWallet::SyncTransaction(const CTransaction& tx, const CBlock* pblock)
+{
+    LOCK2(cs_main, cs_wallet);
+    if (!AddToWalletIfInvolvingMe(tx, pblock, true))
+        return; // Not one of ours
+
+    MarkAffectedTransactionsDirty(tx);
+}
+
+void CWallet::MarkAffectedTransactionsDirty(const CTransaction& tx)
+{
+    // If a transaction changes 'conflicted' state, that changes the balance
+    // available of the outputs it spends. So force those to be
+    // recomputed, also:
+    BOOST_FOREACH(const CTxIn& txin, tx.vin)
+    {
+        if (mapWallet.count(txin.prevout.hash))
+            mapWallet[txin.prevout.hash].MarkDirty();
+    }
+    for (const JSDescription& jsdesc : tx.vjoinsplit) {
+        for (const uint256& nullifier : jsdesc.nullifiers) {
+            if (mapSproutNullifiersToNotes.count(nullifier) &&
+                mapWallet.count(mapSproutNullifiersToNotes[nullifier].hash)) {
+                mapWallet[mapSproutNullifiersToNotes[nullifier].hash].MarkDirty();
+            }
+        }
+    }
+
+    for (const SpendDescription &spend : tx.vShieldedSpend) {
+        uint256 nullifier = spend.nullifier;
+        if (mapSaplingNullifiersToNotes.count(nullifier) &&
+            mapWallet.count(mapSaplingNullifiersToNotes[nullifier].hash)) {
+            mapWallet[mapSaplingNullifiersToNotes[nullifier].hash].MarkDirty();
+        }
+    }
+}
+
+void CWallet::EraseFromWallet(const uint256 &hash)
+{
+    if (!fFileBacked)
+        return;
+    {
+        LOCK(cs_wallet);
+        if (mapWallet.erase(hash))
+            CWalletDB(strWalletFile).EraseTx(hash);
+    }
+    return;
+}
+
+
+/**
+ * Returns a nullifier if the SpendingKey is available
+ * Throws std::runtime_error if the decryptor doesn't match this note
+ */
+boost::optional<uint256> CWallet::GetSproutNoteNullifier(const JSDescription &jsdesc,
+                                                         const libzcash::SproutPaymentAddress &address,
+                                                         const ZCNoteDecryption &dec,
+                                                         const uint256 &hSig,
+                                                         uint8_t n) const
+{
+    boost::optional<uint256> ret;
+    auto note_pt = libzcash::SproutNotePlaintext::decrypt(
+        dec,
+        jsdesc.ciphertexts[n],
+        jsdesc.ephemeralKey,
+        hSig,
+        (unsigned char) n);
+    auto note = note_pt.note(address);
+    // SpendingKeys are only available if:
+    // - We have them (this isn't a viewing key)
+    // - The wallet is unlocked
+    libzcash::SproutSpendingKey key;
+    if (GetSproutSpendingKey(address, key)) {
+        ret = note.nullifier(key);
+    }
+    return ret;
+}
+
+/**
+ * Finds all output notes in the given transaction that have been sent to
+ * PaymentAddresses in this wallet.
+ *
+ * It should never be necessary to call this method with a CWalletTx, because
+ * the result of FindMySproutNotes (for the addresses available at the time) will
+ * already have been cached in CWalletTx.mapSproutNoteData.
+ */
+mapSproutNoteData_t CWallet::FindMySproutNotes(const CTransaction &tx) const
+{
+    LOCK(cs_SpendingKeyStore);
+    uint256 hash = tx.GetHash();
+
+    mapSproutNoteData_t noteData;
+    for (size_t i = 0; i < tx.vjoinsplit.size(); i++) {
+        auto hSig = tx.vjoinsplit[i].h_sig(*pvidulumParams, tx.joinSplitPubKey);
+        for (uint8_t j = 0; j < tx.vjoinsplit[i].ciphertexts.size(); j++) {
+            for (const NoteDecryptorMap::value_type& item : mapNoteDecryptors) {
+                try {
+                    auto address = item.first;
+                    JSOutPoint jsoutpt {hash, i, j};
+                    auto nullifier = GetSproutNoteNullifier(
+                        tx.vjoinsplit[i],
+                        address,
+                        item.second,
+                        hSig, j);
+                    if (nullifier) {
+                        SproutNoteData nd {address, *nullifier};
+                        noteData.insert(std::make_pair(jsoutpt, nd));
+                    } else {
+                        SproutNoteData nd {address};
+                        noteData.insert(std::make_pair(jsoutpt, nd));
+                    }
+                    break;
+                } catch (const note_decryption_failed &err) {
+                    // Couldn't decrypt with this decryptor
+                } catch (const std::exception &exc) {
+                    // Unexpected failure
+                    LogPrintf("FindMySproutNotes(): Unexpected error while testing decrypt:\n");
+                    LogPrintf("%s\n", exc.what());
+                }
+            }
+        }
+    }
+    return noteData;
+}
+
+
+/**
+ * Finds all output notes in the given transaction that have been sent to
+ * SaplingPaymentAddresses in this wallet.
+ *
+ * It should never be necessary to call this method with a CWalletTx, because
+ * the result of FindMySaplingNotes (for the addresses available at the time) will
+ * already have been cached in CWalletTx.mapSaplingNoteData.
+ */
+std::pair<mapSaplingNoteData_t, SaplingIncomingViewingKeyMap> CWallet::FindMySaplingNotes(const CTransaction &tx) const
+{
+    LOCK(cs_SpendingKeyStore);
+    uint256 hash = tx.GetHash();
+
+    mapSaplingNoteData_t noteData;
+    SaplingIncomingViewingKeyMap viewingKeysToAdd;
+
+    // Protocol Spec: 4.19 Block Chain Scanning (Sapling)
+    for (uint32_t i = 0; i < tx.vShieldedOutput.size(); ++i) {
+        const OutputDescription output = tx.vShieldedOutput[i];
+        for (auto it = mapSaplingFullViewingKeys.begin(); it != mapSaplingFullViewingKeys.end(); ++it) {
+            SaplingIncomingViewingKey ivk = it->first;
+            auto result = SaplingNotePlaintext::decrypt(output.encCiphertext, ivk, output.ephemeralKey, output.cm);
+            if (!result) {
+                continue;
+            }
+            auto address = ivk.address(result.get().d);
+            if (address && mapSaplingIncomingViewingKeys.count(address.get()) == 0) {
+                viewingKeysToAdd[address.get()] = ivk;
+            
