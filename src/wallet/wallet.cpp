@@ -1536,4 +1536,157 @@ bool CWallet::AddToWallet(const CWalletTx& wtxIn, bool fFromLoadWallet, CWalletD
                             int64_t nSmartTime;
                             if (pwtx)
                             {
-                                nS
+                                nSmartTime = pwtx->nTimeSmart;
+                                if (!nSmartTime)
+                                    nSmartTime = pwtx->nTimeReceived;
+                            }
+                            else
+                                nSmartTime = pacentry->nTime;
+                            if (nSmartTime <= latestTolerated)
+                            {
+                                latestEntry = nSmartTime;
+                                if (nSmartTime > latestNow)
+                                    latestNow = nSmartTime;
+                                break;
+                            }
+                        }
+                    }
+
+                    int64_t blocktime = mapBlockIndex[wtxIn.hashBlock]->GetBlockTime();
+                    wtx.nTimeSmart = std::max(latestEntry, std::min(blocktime, latestNow));
+                }
+                else
+                    LogPrintf("AddToWallet(): found %s in block %s not in index\n",
+                             wtxIn.GetHash().ToString(),
+                             wtxIn.hashBlock.ToString());
+            }
+            AddToSpends(hash);
+        }
+
+        bool fUpdated = false;
+        if (!fInsertedNew)
+        {
+            // Merge
+            if (!wtxIn.hashBlock.IsNull() && wtxIn.hashBlock != wtx.hashBlock)
+            {
+                wtx.hashBlock = wtxIn.hashBlock;
+                fUpdated = true;
+            }
+            if (wtxIn.nIndex != -1 && (wtxIn.vMerkleBranch != wtx.vMerkleBranch || wtxIn.nIndex != wtx.nIndex))
+            {
+                wtx.vMerkleBranch = wtxIn.vMerkleBranch;
+                wtx.nIndex = wtxIn.nIndex;
+                fUpdated = true;
+            }
+            if (UpdatedNoteData(wtxIn, wtx)) {
+                fUpdated = true;
+            }
+            if (wtxIn.fFromMe && wtxIn.fFromMe != wtx.fFromMe)
+            {
+                wtx.fFromMe = wtxIn.fFromMe;
+                fUpdated = true;
+            }
+        }
+
+        //// debug print
+        LogPrintf("AddToWallet %s  %s%s\n", wtxIn.GetHash().ToString(), (fInsertedNew ? "new" : ""), (fUpdated ? "update" : ""));
+
+        // Write to disk
+        if (fInsertedNew || fUpdated)
+            if (!wtx.WriteToDisk(pwalletdb))
+                return false;
+
+        // Break debit/credit balance caches:
+        wtx.MarkDirty();
+
+        // Notify UI of new or updated transaction
+        NotifyTransactionChanged(this, hash, fInsertedNew ? CT_NEW : CT_UPDATED);
+
+        // notify an external script when a wallet transaction comes in or is updated
+        std::string strCmd = GetArg("-walletnotify", "");
+
+        if ( !strCmd.empty())
+        {
+            boost::replace_all(strCmd, "%s", wtxIn.GetHash().GetHex());
+            boost::thread t(runCommand, strCmd); // thread runs free
+        }
+
+    }
+    return true;
+}
+
+bool CWallet::UpdatedNoteData(const CWalletTx& wtxIn, CWalletTx& wtx)
+{
+    bool unchangedSproutFlag = (wtxIn.mapSproutNoteData.empty() || wtxIn.mapSproutNoteData == wtx.mapSproutNoteData);
+    if (!unchangedSproutFlag) {
+        auto tmp = wtxIn.mapSproutNoteData;
+        // Ensure we keep any cached witnesses we may already have
+        for (const std::pair <JSOutPoint, SproutNoteData> nd : wtx.mapSproutNoteData) {
+            if (tmp.count(nd.first) && nd.second.witnesses.size() > 0) {
+                tmp.at(nd.first).witnesses.assign(
+                        nd.second.witnesses.cbegin(), nd.second.witnesses.cend());
+            }
+            tmp.at(nd.first).witnessHeight = nd.second.witnessHeight;
+        }
+        // Now copy over the updated note data
+        wtx.mapSproutNoteData = tmp;
+    }
+
+    bool unchangedSaplingFlag = (wtxIn.mapSaplingNoteData.empty() || wtxIn.mapSaplingNoteData == wtx.mapSaplingNoteData);
+    if (!unchangedSaplingFlag) {
+        auto tmp = wtxIn.mapSaplingNoteData;
+        // Ensure we keep any cached witnesses we may already have
+
+        for (const std::pair <SaplingOutPoint, SaplingNoteData> nd : wtx.mapSaplingNoteData) {
+            if (tmp.count(nd.first) && nd.second.witnesses.size() > 0) {
+                tmp.at(nd.first).witnesses.assign(
+                        nd.second.witnesses.cbegin(), nd.second.witnesses.cend());
+            }
+            tmp.at(nd.first).witnessHeight = nd.second.witnessHeight;
+        }
+
+        // Now copy over the updated note data
+        wtx.mapSaplingNoteData = tmp;
+    }
+
+    return !unchangedSproutFlag || !unchangedSaplingFlag;
+}
+
+/**
+ * Add a transaction to the wallet, or update it.
+ * pblock is optional, but should be provided if the transaction is known to be in a block.
+ * If fUpdate is true, existing transactions will be updated.
+ */
+bool CWallet::AddToWalletIfInvolvingMe(const CTransaction& tx, const CBlock* pblock, bool fUpdate)
+{
+    {
+        AssertLockHeld(cs_wallet);
+        bool fExisted = mapWallet.count(tx.GetHash()) != 0;
+        if (fExisted && !fUpdate) return false;
+        auto sproutNoteData = FindMySproutNotes(tx);
+        auto saplingNoteDataAndAddressesToAdd = FindMySaplingNotes(tx);
+        auto saplingNoteData = saplingNoteDataAndAddressesToAdd.first;
+        auto addressesToAdd = saplingNoteDataAndAddressesToAdd.second;
+        for (const auto &addressToAdd : addressesToAdd) {
+            if (!AddSaplingIncomingViewingKey(addressToAdd.second, addressToAdd.first)) {
+                return false;
+            }
+        }
+        if (fExisted || IsMine(tx) || IsFromMe(tx) || sproutNoteData.size() > 0 || saplingNoteData.size() > 0)
+        {
+            CWalletTx wtx(this,tx);
+
+            if (sproutNoteData.size() > 0) {
+                wtx.SetSproutNoteData(sproutNoteData);
+            }
+
+            if (saplingNoteData.size() > 0) {
+                wtx.SetSaplingNoteData(saplingNoteData);
+            }
+
+            // Get merkle branch if transaction was found in a block
+            if (pblock)
+                wtx.SetMerkleBranch(*pblock);
+
+            // Do not flush the wallet here for performance reasons
+            // this is safe, as in case of a crash, we rescan the ne
