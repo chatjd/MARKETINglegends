@@ -1852,4 +1852,181 @@ std::pair<mapSaplingNoteData_t, SaplingIncomingViewingKeyMap> CWallet::FindMySap
             auto address = ivk.address(result.get().d);
             if (address && mapSaplingIncomingViewingKeys.count(address.get()) == 0) {
                 viewingKeysToAdd[address.get()] = ivk;
-            
+            }
+            // We don't cache the nullifier here as computing it requires knowledge of the note position
+            // in the commitment tree, which can only be determined when the transaction has been mined.
+            SaplingOutPoint op {hash, i};
+            SaplingNoteData nd;
+            nd.ivk = ivk;
+            noteData.insert(std::make_pair(op, nd));
+            break;
+        }
+    }
+
+    return std::make_pair(noteData, viewingKeysToAdd);
+}
+
+bool CWallet::IsSproutNullifierFromMe(const uint256& nullifier) const
+{
+    {
+        LOCK(cs_wallet);
+        if (mapSproutNullifiersToNotes.count(nullifier) &&
+                mapWallet.count(mapSproutNullifiersToNotes.at(nullifier).hash)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool CWallet::IsSaplingNullifierFromMe(const uint256& nullifier) const
+{
+    {
+        LOCK(cs_wallet);
+        if (mapSaplingNullifiersToNotes.count(nullifier) &&
+                mapWallet.count(mapSaplingNullifiersToNotes.at(nullifier).hash)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void CWallet::GetSproutNoteWitnesses(std::vector<JSOutPoint> notes,
+                                     std::vector<boost::optional<SproutWitness>>& witnesses,
+                                     uint256 &final_anchor)
+{
+    LOCK(cs_wallet);
+    witnesses.resize(notes.size());
+    boost::optional<uint256> rt;
+    int i = 0;
+    for (JSOutPoint note : notes) {
+        if (mapWallet.count(note.hash) &&
+                mapWallet[note.hash].mapSproutNoteData.count(note) &&
+                mapWallet[note.hash].mapSproutNoteData[note].witnesses.size() > 0) {
+            witnesses[i] = mapWallet[note.hash].mapSproutNoteData[note].witnesses.front();
+            if (!rt) {
+                rt = witnesses[i]->root();
+            } else {
+                assert(*rt == witnesses[i]->root());
+            }
+        }
+        i++;
+    }
+    // All returned witnesses have the same anchor
+    if (rt) {
+        final_anchor = *rt;
+    }
+}
+
+void CWallet::GetSaplingNoteWitnesses(std::vector<SaplingOutPoint> notes,
+                                      std::vector<boost::optional<SaplingWitness>>& witnesses,
+                                      uint256 &final_anchor)
+{
+    LOCK(cs_wallet);
+    witnesses.resize(notes.size());
+    boost::optional<uint256> rt;
+    int i = 0;
+    for (SaplingOutPoint note : notes) {
+        if (mapWallet.count(note.hash) &&
+                mapWallet[note.hash].mapSaplingNoteData.count(note) &&
+                mapWallet[note.hash].mapSaplingNoteData[note].witnesses.size() > 0) {
+            witnesses[i] = mapWallet[note.hash].mapSaplingNoteData[note].witnesses.front();
+            if (!rt) {
+                rt = witnesses[i]->root();
+            } else {
+                assert(*rt == witnesses[i]->root());
+            }
+        }
+        i++;
+    }
+    // All returned witnesses have the same anchor
+    if (rt) {
+        final_anchor = *rt;
+    }
+}
+
+isminetype CWallet::IsMine(const CTxIn &txin) const
+{
+    {
+        LOCK(cs_wallet);
+        map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(txin.prevout.hash);
+        if (mi != mapWallet.end())
+        {
+            const CWalletTx& prev = (*mi).second;
+            if (txin.prevout.n < prev.vout.size())
+                return IsMine(prev.vout[txin.prevout.n]);
+        }
+    }
+    return ISMINE_NO;
+}
+
+CAmount CWallet::GetDebit(const CTxIn &txin, const isminefilter& filter) const
+{
+    {
+        LOCK(cs_wallet);
+        map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(txin.prevout.hash);
+        if (mi != mapWallet.end())
+        {
+            const CWalletTx& prev = (*mi).second;
+            if (txin.prevout.n < prev.vout.size())
+                if (IsMine(prev.vout[txin.prevout.n]) & filter)
+                    return prev.vout[txin.prevout.n].nValue;
+        }
+    }
+    return 0;
+}
+
+isminetype CWallet::IsMine(const CTxOut& txout) const
+{
+    return ::IsMine(*this, txout.scriptPubKey);
+}
+
+CAmount CWallet::GetCredit(const CTxOut& txout, const isminefilter& filter) const
+{
+    if (!MoneyRange(txout.nValue))
+        throw std::runtime_error("CWallet::GetCredit(): value out of range");
+    return ((IsMine(txout) & filter) ? txout.nValue : 0);
+}
+
+
+// Recursively determine the rounds of a given input (How deep is the Obfuscation chain for a given input)
+int CWallet::GetRealInputObfuscationRounds(CTxIn in, int rounds) const
+{
+    static std::map<uint256, CMutableTransaction> mDenomWtxes;
+
+    if (rounds >= 16) return 15; // 16 rounds max
+
+    uint256 hash = in.prevout.hash;
+    unsigned int nout = in.prevout.n;
+
+    const CWalletTx* wtx = GetWalletTx(hash);
+    if (wtx != NULL) {
+        std::map<uint256, CMutableTransaction>::const_iterator mdwi = mDenomWtxes.find(hash);
+        // not known yet, let's add it
+        if (mdwi == mDenomWtxes.end()) {
+            LogPrint("obfuscation", "GetInputObfuscationRounds INSERTING %s\n", hash.ToString());
+            mDenomWtxes[hash] = CMutableTransaction(*wtx);
+        }
+        // found and it's not an initial value, just return it
+        else if (mDenomWtxes[hash].vout[nout].nRounds != -10) {
+            return mDenomWtxes[hash].vout[nout].nRounds;
+        }
+
+
+        // bounds check
+        if (nout >= wtx->vout.size()) {
+            // should never actually hit this
+            LogPrint("obfuscation", "GetInputObfuscationRounds UPDATED   %s %3d %3d\n", hash.ToString(), nout, -4);
+            return -4;
+        }
+
+        if (pwalletMain->IsCollateralAmount(wtx->vout[nout].nValue)) {
+            mDenomWtxes[hash].vout[nout].nRounds = -3;
+            LogPrint("obfuscation", "GetInputObfuscationRounds UPDATED   %s %3d %3d\n", hash.ToString(), nout, mDenomWtxes[hash].vout[nout].nRounds);
+            return mDenomWtxes[hash].vout[nout].nRounds;
+        }
+
+        //make sure the final output is non-denominate
+        if (/*rounds == 0 && */ !IsDenominatedAmount(wtx->vout[nout].nValue)) //NOT DENOM
+        {
+            mDenomWtxes[hash].vout[nout].nRounds = -2;
+            LogPrint("obfuscation", "GetIn
