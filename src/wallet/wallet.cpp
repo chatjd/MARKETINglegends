@@ -2400,4 +2400,182 @@ bool CWallet::SetHDSeed(const HDSeed& seed)
     {
         LOCK(cs_wallet);
         if (!IsCrypted()) {
-            return CWalletDB(strWalletFile).W
+            return CWalletDB(strWalletFile).WriteHDSeed(seed);
+        }
+    }
+    return true;
+}
+
+bool CWallet::SetCryptedHDSeed(const uint256& seedFp, const std::vector<unsigned char> &vchCryptedSecret)
+{
+    if (!CCryptoKeyStore::SetCryptedHDSeed(seedFp, vchCryptedSecret)) {
+        return false;
+    }
+
+    if (!fFileBacked) {
+        return true;
+    }
+
+    {
+        LOCK(cs_wallet);
+        if (pwalletdbEncryption)
+            return pwalletdbEncryption->WriteCryptedHDSeed(seedFp, vchCryptedSecret);
+        else
+            return CWalletDB(strWalletFile).WriteCryptedHDSeed(seedFp, vchCryptedSecret);
+    }
+    return false;
+}
+
+void CWallet::SetHDChain(const CHDChain& chain, bool memonly)
+{
+    LOCK(cs_wallet);
+    if (!memonly && fFileBacked && !CWalletDB(strWalletFile).WriteHDChain(chain))
+        throw std::runtime_error(std::string(__func__) + ": writing chain failed");
+
+    hdChain = chain;
+}
+
+bool CWallet::LoadHDSeed(const HDSeed& seed)
+{
+    return CBasicKeyStore::SetHDSeed(seed);
+}
+
+bool CWallet::LoadCryptedHDSeed(const uint256& seedFp, const std::vector<unsigned char>& seed)
+{
+    return CCryptoKeyStore::SetCryptedHDSeed(seedFp, seed);
+}
+
+void CWalletTx::SetSproutNoteData(mapSproutNoteData_t &noteData)
+{
+    mapSproutNoteData.clear();
+    for (const std::pair<JSOutPoint, SproutNoteData> nd : noteData) {
+        if (nd.first.js < vjoinsplit.size() &&
+                nd.first.n < vjoinsplit[nd.first.js].ciphertexts.size()) {
+            // Store the address and nullifier for the Note
+            mapSproutNoteData[nd.first] = nd.second;
+        } else {
+            // If FindMySproutNotes() was used to obtain noteData,
+            // this should never happen
+            throw std::logic_error("CWalletTx::SetSproutNoteData(): Invalid note");
+        }
+    }
+}
+
+void CWalletTx::SetSaplingNoteData(mapSaplingNoteData_t &noteData)
+{
+    mapSaplingNoteData.clear();
+    for (const std::pair<SaplingOutPoint, SaplingNoteData> nd : noteData) {
+        if (nd.first.n < vShieldedOutput.size()) {
+            mapSaplingNoteData[nd.first] = nd.second;
+        } else {
+            throw std::logic_error("CWalletTx::SetSaplingNoteData(): Invalid note");
+        }
+    }
+}
+
+int64_t CWalletTx::GetTxTime() const
+{
+    int64_t n = nTimeSmart;
+    return n ? n : nTimeReceived;
+}
+
+int CWalletTx::GetRequestCount() const
+{
+    // Returns -1 if it wasn't being tracked
+    int nRequests = -1;
+    {
+        LOCK(pwallet->cs_wallet);
+        if (IsCoinBase())
+        {
+            // Generated block
+            if (!hashBlock.IsNull())
+            {
+                map<uint256, int>::const_iterator mi = pwallet->mapRequestCount.find(hashBlock);
+                if (mi != pwallet->mapRequestCount.end())
+                    nRequests = (*mi).second;
+            }
+        }
+        else
+        {
+            // Did anyone request this transaction?
+            map<uint256, int>::const_iterator mi = pwallet->mapRequestCount.find(GetHash());
+            if (mi != pwallet->mapRequestCount.end())
+            {
+                nRequests = (*mi).second;
+
+                // How about the block it's in?
+                if (nRequests == 0 && !hashBlock.IsNull())
+                {
+                    map<uint256, int>::const_iterator mi = pwallet->mapRequestCount.find(hashBlock);
+                    if (mi != pwallet->mapRequestCount.end())
+                        nRequests = (*mi).second;
+                    else
+                        nRequests = 1; // If it's in someone else's block it must have got out
+                }
+            }
+        }
+    }
+    return nRequests;
+}
+
+// GetAmounts will determine the transparent debits and credits for a given wallet tx.
+void CWalletTx::GetAmounts(list<COutputEntry>& listReceived,
+                           list<COutputEntry>& listSent, CAmount& nFee, string& strSentAccount, const isminefilter& filter) const
+{
+    nFee = 0;
+    listReceived.clear();
+    listSent.clear();
+    strSentAccount = strFromAccount;
+
+    // Is this tx sent/signed by me?
+    CAmount nDebit = GetDebit(filter);
+    bool isFromMyTaddr = nDebit > 0; // debit>0 means we signed/sent this transaction
+
+    // Compute fee if we sent this transaction.
+    if (isFromMyTaddr) {
+        CAmount nValueOut = GetValueOut();  // transparent outputs plus all Sprout vpub_old and negative Sapling valueBalance
+        CAmount nValueIn = GetShieldedValueIn();
+        nFee = nDebit - nValueOut + nValueIn;
+    }
+
+    // Create output entry for vpub_old/new, if we sent utxos from this transaction
+    if (isFromMyTaddr) {
+        CAmount myVpubOld = 0;
+        CAmount myVpubNew = 0;
+        for (const JSDescription& js : vjoinsplit) {
+            bool fMyJSDesc = false;
+
+            // Check input side
+            for (const uint256& nullifier : js.nullifiers) {
+                if (pwallet->IsSproutNullifierFromMe(nullifier)) {
+                    fMyJSDesc = true;
+                    break;
+                }
+            }
+
+            // Check output side
+            if (!fMyJSDesc) {
+                for (const std::pair<JSOutPoint, SproutNoteData> nd : this->mapSproutNoteData) {
+                    if (nd.first.js < vjoinsplit.size() && nd.first.n < vjoinsplit[nd.first.js].ciphertexts.size()) {
+                        fMyJSDesc = true;
+                        break;
+                    }
+                }
+            }
+
+            if (fMyJSDesc) {
+                myVpubOld += js.vpub_old;
+                myVpubNew += js.vpub_new;
+            }
+
+            if (!MoneyRange(js.vpub_old) || !MoneyRange(js.vpub_new) || !MoneyRange(myVpubOld) || !MoneyRange(myVpubNew)) {
+                 throw std::runtime_error("CWalletTx::GetAmounts: value out of range");
+            }
+        }
+
+        // Create an output for the value taken from or added to the transparent value pool by JoinSplits
+        if (myVpubOld > myVpubNew) {
+            COutputEntry output = {CNoDestination(), myVpubOld - myVpubNew, (int)vout.size()};
+            listSent.push_back(output);
+        } else if (myVpubNew > myVpubOld) {
+            COutputEntry output = {CNoDestination(
