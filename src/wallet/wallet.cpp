@@ -2941,4 +2941,202 @@ CAmount CWalletTx::GetCredit(const isminefilter& filter) const
 
 CAmount CWalletTx::GetImmatureCredit(bool fUseCache) const
 {
-    if (IsC
+    if (IsCoinBase() && GetBlocksToMaturity() > 0 && IsInMainChain())
+    {
+        if (fUseCache && fImmatureCreditCached)
+            return nImmatureCreditCached;
+        nImmatureCreditCached = pwallet->GetCredit(*this, ISMINE_SPENDABLE);
+        fImmatureCreditCached = true;
+        return nImmatureCreditCached;
+    }
+
+    return 0;
+}
+
+CAmount CWalletTx::GetAvailableCredit(bool fUseCache) const
+{
+    if (pwallet == 0)
+        return 0;
+
+    // Must wait until coinbase is safely deep enough in the chain before valuing it
+    if (IsCoinBase() && GetBlocksToMaturity() > 0)
+        return 0;
+
+    if (fUseCache && fAvailableCreditCached)
+        return nAvailableCreditCached;
+
+    CAmount nCredit = 0;
+    uint256 hashTx = GetHash();
+    for (unsigned int i = 0; i < vout.size(); i++)
+    {
+        if (!pwallet->IsSpent(hashTx, i))
+        {
+            const CTxOut &txout = vout[i];
+            nCredit += pwallet->GetCredit(txout, ISMINE_SPENDABLE);
+            if (!MoneyRange(nCredit))
+                throw std::runtime_error("CWalletTx::GetAvailableCredit() : value out of range");
+        }
+    }
+
+    nAvailableCreditCached = nCredit;
+    fAvailableCreditCached = true;
+    return nCredit;
+}
+
+CAmount CWalletTx::GetImmatureWatchOnlyCredit(const bool& fUseCache) const
+{
+    if (IsCoinBase() && GetBlocksToMaturity() > 0 && IsInMainChain())
+    {
+        if (fUseCache && fImmatureWatchCreditCached)
+            return nImmatureWatchCreditCached;
+        nImmatureWatchCreditCached = pwallet->GetCredit(*this, ISMINE_WATCH_ONLY);
+        fImmatureWatchCreditCached = true;
+        return nImmatureWatchCreditCached;
+    }
+
+    return 0;
+}
+
+CAmount CWalletTx::GetAvailableWatchOnlyCredit(const bool& fUseCache) const
+{
+    if (pwallet == 0)
+        return 0;
+
+    // Must wait until coinbase is safely deep enough in the chain before valuing it
+    if (IsCoinBase() && GetBlocksToMaturity() > 0)
+        return 0;
+
+    if (fUseCache && fAvailableWatchCreditCached)
+        return nAvailableWatchCreditCached;
+
+    CAmount nCredit = 0;
+    for (unsigned int i = 0; i < vout.size(); i++)
+    {
+        if (!pwallet->IsSpent(GetHash(), i))
+        {
+            const CTxOut &txout = vout[i];
+            nCredit += pwallet->GetCredit(txout, ISMINE_WATCH_ONLY);
+            if (!MoneyRange(nCredit))
+                throw std::runtime_error("CWalletTx::GetAvailableCredit() : value out of range");
+        }
+    }
+
+    nAvailableWatchCreditCached = nCredit;
+    fAvailableWatchCreditCached = true;
+    return nCredit;
+}
+
+
+CAmount CWalletTx::GetAnonymizableCredit(bool fUseCache) const
+{
+    if (pwallet == 0)
+        return 0;
+
+    // Must wait until coinbase is safely deep enough in the chain before valuing it
+    if (IsCoinBase() && GetBlocksToMaturity() > 0)
+        return 0;
+
+    if (fUseCache && fAnonymizableCreditCached)
+        return nAnonymizableCreditCached;
+
+    CAmount nCredit = 0;
+    uint256 hashTx = GetHash();
+    for (unsigned int i = 0; i < vout.size(); i++) {
+        const CTxOut& txout = vout[i];
+        const CTxIn vin = CTxIn(hashTx, i);
+
+        if (pwallet->IsSpent(hashTx, i) || pwallet->IsLockedCoin(hashTx, i)) continue;
+        if (fMasterNode && vout[i].nValue == 15000 * COIN) continue; // do not count MN-like outputs
+
+        const int rounds = pwallet->GetInputObfuscationRounds(vin);
+        if (rounds >= -2 && rounds < nVidulumSendRounds) {
+            nCredit += pwallet->GetCredit(txout, ISMINE_SPENDABLE);
+            if (!MoneyRange(nCredit))
+                throw std::runtime_error("CWalletTx::GetAnonamizableCredit() : value out of range");
+        }
+    }
+
+    nAnonymizableCreditCached = nCredit;
+    fAnonymizableCreditCached = true;
+    return nCredit;
+}
+CAmount CWalletTx::GetChange() const
+{
+    if (fChangeCached)
+        return nChangeCached;
+    nChangeCached = pwallet->GetChange(*this);
+    fChangeCached = true;
+    return nChangeCached;
+}
+
+bool CWalletTx::IsTrusted() const
+{
+    // Quick answer in most cases
+    if (!CheckFinalTx(*this))
+        return false;
+    int nDepth = GetDepthInMainChain();
+    if (nDepth >= 1)
+        return true;
+    if (nDepth < 0)
+        return false;
+    if (!bSpendZeroConfChange || !IsFromMe(ISMINE_ALL)) // using wtx's cached debit
+        return false;
+
+    // Trusted if all inputs are from us and are in the mempool:
+    BOOST_FOREACH(const CTxIn& txin, vin)
+    {
+        // Transactions not sent by us: not trusted
+        const CWalletTx* parent = pwallet->GetWalletTx(txin.prevout.hash);
+        if (parent == NULL)
+            return false;
+        const CTxOut& parentOut = parent->vout[txin.prevout.n];
+        if (pwallet->IsMine(parentOut) != ISMINE_SPENDABLE)
+            return false;
+    }
+    return true;
+}
+
+std::vector<uint256> CWallet::ResendWalletTransactionsBefore(int64_t nTime)
+{
+    std::vector<uint256> result;
+
+    LOCK(cs_wallet);
+    // Sort them in chronological order
+    multimap<unsigned int, CWalletTx*> mapSorted;
+    BOOST_FOREACH(PAIRTYPE(const uint256, CWalletTx)& item, mapWallet)
+    {
+        CWalletTx& wtx = item.second;
+        // Don't rebroadcast if newer than nTime:
+        if (wtx.nTimeReceived > nTime)
+            continue;
+        mapSorted.insert(make_pair(wtx.nTimeReceived, &wtx));
+    }
+    BOOST_FOREACH(PAIRTYPE(const unsigned int, CWalletTx*)& item, mapSorted)
+    {
+        CWalletTx& wtx = *item.second;
+        if (wtx.RelayWalletTransaction())
+            result.push_back(wtx.GetHash());
+    }
+    return result;
+}
+
+void CWallet::ResendWalletTransactions(int64_t nBestBlockTime)
+{
+    // Do this infrequently and randomly to avoid giving away
+    // that these are our transactions.
+    if (GetTime() < nNextResend || !fBroadcastTransactions)
+        return;
+    bool fFirst = (nNextResend == 0);
+    nNextResend = GetTime() + GetRand(30 * 60);
+    if (fFirst)
+        return;
+
+    // Only do it if there's been a new block since last time
+    if (nBestBlockTime < nLastResend)
+        return;
+    nLastResend = GetTime();
+
+    // Rebroadcast unconfirmed txes older than 5 minutes before the last
+    // block was found:
+    std::vector<uint256> relayed = ResendWalletTransactionsBefore(nBestBlockTime-5*60);
+    if (!relay
