@@ -2757,4 +2757,188 @@ int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate)
 
         ShowProgress(_("Rescanning..."), 0); // show rescan progress in GUI as dialog or on splashscreen, if -rescan on startup
         double dProgressStart = Checkpoints::GuessVerificationProgress(chainParams.Checkpoints(), pindex, false);
-        double dProgressTip = Checkpoints::Guess
+        double dProgressTip = Checkpoints::GuessVerificationProgress(chainParams.Checkpoints(), chainActive.Tip(), false);
+        while (pindex)
+        {
+            if (pindex->nHeight % 100 == 0 && dProgressTip - dProgressStart > 0.0)
+                ShowProgress(_("Rescanning..."), std::max(1, std::min(99, (int)((Checkpoints::GuessVerificationProgress(chainParams.Checkpoints(), pindex, false) - dProgressStart) / (dProgressTip - dProgressStart) * 100))));
+
+            CBlock block;
+            ReadBlockFromDisk(block, pindex);
+            BOOST_FOREACH(CTransaction& tx, block.vtx)
+            {
+                if (AddToWalletIfInvolvingMe(tx, &block, fUpdate)) {
+                    myTxHashes.push_back(tx.GetHash());
+                    ret++;
+                }
+            }
+
+            SproutMerkleTree sproutTree;
+            SaplingMerkleTree saplingTree;
+            // This should never fail: we should always be able to get the tree
+            // state on the path to the tip of our chain
+            assert(pcoinsTip->GetSproutAnchorAt(pindex->hashSproutAnchor, sproutTree));
+            if (pindex->pprev) {
+                if (NetworkUpgradeActive(pindex->pprev->nHeight, Params().GetConsensus(), Consensus::UPGRADE_SAPLING)) {
+                    assert(pcoinsTip->GetSaplingAnchorAt(pindex->pprev->hashFinalSaplingRoot, saplingTree));
+                }
+            }
+            // Increment note witness caches
+            ChainTip(pindex, &block, sproutTree, saplingTree, true);
+
+            pindex = chainActive.Next(pindex);
+            if (GetTime() >= nNow + 60) {
+                nNow = GetTime();
+                LogPrintf("Still rescanning. At block %d. Progress=%f\n", pindex->nHeight, Checkpoints::GuessVerificationProgress(chainParams.Checkpoints(), pindex));
+            }
+        }
+
+        // After rescanning, persist Sapling note data that might have changed, e.g. nullifiers.
+        // Do not flush the wallet here for performance reasons.
+        CWalletDB walletdb(strWalletFile, "r+", false);
+        for (auto hash : myTxHashes) {
+            CWalletTx wtx = mapWallet[hash];
+            if (!wtx.mapSaplingNoteData.empty()) {
+                if (!wtx.WriteToDisk(&walletdb)) {
+                    LogPrintf("Rescanning... WriteToDisk failed to update Sapling note data for: %s\n", hash.ToString());
+                }
+            }
+        }
+
+        ShowProgress(_("Rescanning..."), 100); // hide progress dialog in GUI
+    }
+    return ret;
+}
+
+void CWallet::ReacceptWalletTransactions()
+{
+    // If transactions aren't being broadcasted, don't let them into local mempool either
+    if (!fBroadcastTransactions)
+        return;
+    LOCK2(cs_main, cs_wallet);
+    std::map<int64_t, CWalletTx*> mapSorted;
+
+    // Sort pending wallet transactions based on their initial wallet insertion order
+    BOOST_FOREACH(PAIRTYPE(const uint256, CWalletTx)& item, mapWallet)
+    {
+        const uint256& wtxid = item.first;
+        CWalletTx& wtx = item.second;
+        assert(wtx.GetHash() == wtxid);
+
+        int nDepth = wtx.GetDepthInMainChain();
+
+        if (!wtx.IsCoinBase() && nDepth < 0) {
+            mapSorted.insert(std::make_pair(wtx.nOrderPos, &wtx));
+        }
+    }
+
+    // Try to add wallet transactions to memory pool
+    BOOST_FOREACH(PAIRTYPE(const int64_t, CWalletTx*)& item, mapSorted)
+    {
+        CWalletTx& wtx = *(item.second);
+
+        LOCK(mempool.cs);
+        wtx.AcceptToMemoryPool(false);
+    }
+}
+
+bool CWalletTx::RelayWalletTransaction(std::string strCommand)
+{
+    assert(pwallet->GetBroadcastTransactions());
+    if (!IsCoinBase())
+    {
+        if (GetDepthInMainChain() == 0) {
+            uint256 hash = GetHash();
+            LogPrintf("Relaying wtx %s\n", hash.ToString());
+            if(strCommand == "ix"){
+                mapTxLockReq.insert(make_pair(hash, (CTransaction)*this));
+                CreateNewLock(((CTransaction)*this));
+                RelayTransactionLockReq((CTransaction)*this, true);
+            } else {
+                RelayTransaction((CTransaction)*this);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+set<uint256> CWalletTx::GetConflicts() const
+{
+    set<uint256> result;
+    if (pwallet != NULL)
+    {
+        uint256 myHash = GetHash();
+        result = pwallet->GetConflicts(myHash);
+        result.erase(myHash);
+    }
+    return result;
+}
+
+CAmount CWalletTx::GetDebit(const isminefilter& filter) const
+{
+    if (vin.empty())
+        return 0;
+
+    CAmount debit = 0;
+    if(filter & ISMINE_SPENDABLE)
+    {
+        if (fDebitCached)
+            debit += nDebitCached;
+        else
+        {
+            nDebitCached = pwallet->GetDebit(*this, ISMINE_SPENDABLE);
+            fDebitCached = true;
+            debit += nDebitCached;
+        }
+    }
+    if(filter & ISMINE_WATCH_ONLY)
+    {
+        if(fWatchDebitCached)
+            debit += nWatchDebitCached;
+        else
+        {
+            nWatchDebitCached = pwallet->GetDebit(*this, ISMINE_WATCH_ONLY);
+            fWatchDebitCached = true;
+            debit += nWatchDebitCached;
+        }
+    }
+    return debit;
+}
+
+CAmount CWalletTx::GetCredit(const isminefilter& filter) const
+{
+    // Must wait until coinbase is safely deep enough in the chain before valuing it
+    if (IsCoinBase() && GetBlocksToMaturity() > 0)
+        return 0;
+
+    int64_t credit = 0;
+    if (filter & ISMINE_SPENDABLE)
+    {
+        // GetBalance can assume transactions in mapWallet won't change
+        if (fCreditCached)
+            credit += nCreditCached;
+        else
+        {
+            nCreditCached = pwallet->GetCredit(*this, ISMINE_SPENDABLE);
+            fCreditCached = true;
+            credit += nCreditCached;
+        }
+    }
+    if (filter & ISMINE_WATCH_ONLY)
+    {
+        if (fWatchCreditCached)
+            credit += nWatchCreditCached;
+        else
+        {
+            nWatchCreditCached = pwallet->GetCredit(*this, ISMINE_WATCH_ONLY);
+            fWatchCreditCached = true;
+            credit += nWatchCreditCached;
+        }
+    }
+    return credit;
+}
+
+CAmount CWalletTx::GetImmatureCredit(bool fUseCache) const
+{
+    if (IsC
