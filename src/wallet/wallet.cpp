@@ -2578,4 +2578,183 @@ void CWalletTx::GetAmounts(list<COutputEntry>& listReceived,
             COutputEntry output = {CNoDestination(), myVpubOld - myVpubNew, (int)vout.size()};
             listSent.push_back(output);
         } else if (myVpubNew > myVpubOld) {
-            COutputEntry output = {CNoDestination(
+            COutputEntry output = {CNoDestination(), myVpubNew - myVpubOld, (int)vout.size()};
+            listReceived.push_back(output);
+        }
+    }
+
+    // If we sent utxos from this transaction, create output for value taken from (negative valueBalance)
+    // or added (positive valueBalance) to the transparent value pool by Sapling shielding and unshielding.
+    if (isFromMyTaddr) {
+        if (valueBalance < 0) {
+            COutputEntry output = {CNoDestination(), -valueBalance, (int) vout.size()};
+            listSent.push_back(output);
+        } else if (valueBalance > 0) {
+            COutputEntry output = {CNoDestination(), valueBalance, (int) vout.size()};
+            listReceived.push_back(output);
+        }
+    }
+
+    // Sent/received.
+    for (unsigned int i = 0; i < vout.size(); ++i)
+    {
+        const CTxOut& txout = vout[i];
+        isminetype fIsMine = pwallet->IsMine(txout);
+        // Only need to handle txouts if AT LEAST one of these is true:
+        //   1) they debit from us (sent)
+        //   2) the output is to us (received)
+        if (nDebit > 0)
+        {
+            // Don't report 'change' txouts
+            if (pwallet->IsChange(txout))
+                continue;
+        }
+        else if (!(fIsMine & filter))
+            continue;
+
+        // In either case, we need to get the destination address
+        CTxDestination address;
+        if (!ExtractDestination(txout.scriptPubKey, address))
+        {
+            LogPrintf("CWalletTx::GetAmounts: Unknown transaction type found, txid %s\n",
+                     this->GetHash().ToString());
+            address = CNoDestination();
+        }
+
+        COutputEntry output = {address, txout.nValue, (int)i};
+
+        // If we are debited by the transaction, add the output as a "sent" entry
+        if (nDebit > 0)
+            listSent.push_back(output);
+
+        // If we are receiving the output, add it as a "received" entry
+        if (fIsMine & filter)
+            listReceived.push_back(output);
+    }
+
+}
+
+void CWalletTx::GetAccountAmounts(const string& strAccount, CAmount& nReceived,
+                                  CAmount& nSent, CAmount& nFee, const isminefilter& filter) const
+{
+    nReceived = nSent = nFee = 0;
+
+    CAmount allFee;
+    string strSentAccount;
+    list<COutputEntry> listReceived;
+    list<COutputEntry> listSent;
+    GetAmounts(listReceived, listSent, allFee, strSentAccount, filter);
+
+    if (strAccount == strSentAccount)
+    {
+        BOOST_FOREACH(const COutputEntry& s, listSent)
+            nSent += s.amount;
+        nFee = allFee;
+    }
+    {
+        LOCK(pwallet->cs_wallet);
+        BOOST_FOREACH(const COutputEntry& r, listReceived)
+        {
+            if (pwallet->mapAddressBook.count(r.destination))
+            {
+                map<CTxDestination, CAddressBookData>::const_iterator mi = pwallet->mapAddressBook.find(r.destination);
+                if (mi != pwallet->mapAddressBook.end() && (*mi).second.name == strAccount)
+                    nReceived += r.amount;
+            }
+            else if (strAccount.empty())
+            {
+                nReceived += r.amount;
+            }
+        }
+    }
+}
+
+
+bool CWalletTx::WriteToDisk(CWalletDB *pwalletdb)
+{
+    return pwalletdb->WriteTx(GetHash(), *this);
+}
+
+void CWallet::WitnessNoteCommitment(std::vector<uint256> commitments,
+                                    std::vector<boost::optional<SproutWitness>>& witnesses,
+                                    uint256 &final_anchor)
+{
+    witnesses.resize(commitments.size());
+    CBlockIndex* pindex = chainActive.Genesis();
+    SproutMerkleTree tree;
+
+    while (pindex) {
+        CBlock block;
+        ReadBlockFromDisk(block, pindex);
+
+        BOOST_FOREACH(const CTransaction& tx, block.vtx)
+        {
+            BOOST_FOREACH(const JSDescription& jsdesc, tx.vjoinsplit)
+            {
+                BOOST_FOREACH(const uint256 &note_commitment, jsdesc.commitments)
+                {
+                    tree.append(note_commitment);
+
+                    BOOST_FOREACH(boost::optional<SproutWitness>& wit, witnesses) {
+                        if (wit) {
+                            wit->append(note_commitment);
+                        }
+                    }
+
+                    size_t i = 0;
+                    BOOST_FOREACH(uint256& commitment, commitments) {
+                        if (note_commitment == commitment) {
+                            witnesses.at(i) = tree.witness();
+                        }
+                        i++;
+                    }
+                }
+            }
+        }
+
+        uint256 current_anchor = tree.root();
+
+        // Consistency check: we should be able to find the current tree
+        // in our CCoins view.
+        SproutMerkleTree dummy_tree;
+        assert(pcoinsTip->GetSproutAnchorAt(current_anchor, dummy_tree));
+
+        pindex = chainActive.Next(pindex);
+    }
+
+    // TODO: #93; Select a root via some heuristic.
+    final_anchor = tree.root();
+
+    BOOST_FOREACH(boost::optional<SproutWitness>& wit, witnesses) {
+        if (wit) {
+            assert(final_anchor == wit->root());
+        }
+    }
+}
+
+/**
+ * Scan the block chain (starting in pindexStart) for transactions
+ * from or to us. If fUpdate is true, found transactions that already
+ * exist in the wallet will be updated.
+ */
+int CWallet::ScanForWalletTransactions(CBlockIndex* pindexStart, bool fUpdate)
+{
+    int ret = 0;
+    int64_t nNow = GetTime();
+    const CChainParams& chainParams = Params();
+
+    CBlockIndex* pindex = pindexStart;
+
+    std::vector<uint256> myTxHashes;
+
+    {
+        LOCK2(cs_main, cs_wallet);
+
+        // no need to read and scan block, if block was created before
+        // our wallet birthday (as adjusted for block time variability)
+        while (pindex && nTimeFirstKey && (pindex->GetBlockTime() < (nTimeFirstKey - 7200)))
+            pindex = chainActive.Next(pindex);
+
+        ShowProgress(_("Rescanning..."), 0); // show rescan progress in GUI as dialog or on splashscreen, if -rescan on startup
+        double dProgressStart = Checkpoints::GuessVerificationProgress(chainParams.Checkpoints(), pindex, false);
+        double dProgressTip = Checkpoints::Guess
