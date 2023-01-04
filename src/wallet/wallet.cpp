@@ -3139,4 +3139,233 @@ void CWallet::ResendWalletTransactions(int64_t nBestBlockTime)
     // Rebroadcast unconfirmed txes older than 5 minutes before the last
     // block was found:
     std::vector<uint256> relayed = ResendWalletTransactionsBefore(nBestBlockTime-5*60);
-    if (!relay
+    if (!relayed.empty())
+        LogPrintf("%s: rebroadcast %u unconfirmed transactions\n", __func__, relayed.size());
+}
+
+/** @} */ // end of mapWallet
+
+
+
+
+/** @defgroup Actions
+ *
+ * @{
+ */
+
+
+CAmount CWallet::GetBalance() const
+{
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+        {
+            const CWalletTx* pcoin = &(*it).second;
+            if (pcoin->IsTrusted())
+                nTotal += pcoin->GetAvailableCredit();
+        }
+    }
+
+    return nTotal;
+}
+
+
+CAmount CWallet::GetAnonymizableBalance() const
+{
+    if (fLiteMode) return 0;
+
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+
+            if (pcoin->IsTrusted())
+                nTotal += pcoin->GetAnonymizableCredit();
+        }
+    }
+
+    return nTotal;
+}
+
+CAmount CWallet::GetAnonymizedBalance() const
+{
+    if (fLiteMode) return 0;
+
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+
+            if (pcoin->IsTrusted())
+                nTotal += pcoin->GetAnonymizedCredit();
+        }
+    }
+
+    return nTotal;
+}
+
+// Note: calculated including unconfirmed,
+// that's ok as long as we use it for informational purposes only
+double CWallet::GetAverageAnonymizedRounds() const
+{
+    if (fLiteMode) return 0;
+
+    double fTotal = 0;
+    double fCount = 0;
+
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+
+            uint256 hash = (*it).first;
+
+            for (unsigned int i = 0; i < pcoin->vout.size(); i++) {
+                CTxIn vin = CTxIn(hash, i);
+
+                if (IsSpent(hash, i) || IsMine(pcoin->vout[i]) != ISMINE_SPENDABLE || !IsDenominated(vin)) continue;
+
+                int rounds = GetInputObfuscationRounds(vin);
+                fTotal += (float)rounds;
+                fCount += 1;
+            }
+        }
+    }
+
+    if (fCount == 0) return 0;
+
+    return fTotal / fCount;
+}
+
+// Note: calculated including unconfirmed,
+// that's ok as long as we use it for informational purposes only
+CAmount CWallet::GetNormalizedAnonymizedBalance() const
+{
+    if (fLiteMode) return 0;
+
+    CAmount nTotal = 0;
+
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+
+            uint256 hash = (*it).first;
+
+            for (unsigned int i = 0; i < pcoin->vout.size(); i++) {
+                CTxIn vin = CTxIn(hash, i);
+
+                if (IsSpent(hash, i) || IsMine(pcoin->vout[i]) != ISMINE_SPENDABLE || !IsDenominated(vin)) continue;
+                if (pcoin->GetDepthInMainChain() < 0) continue;
+
+                int rounds = GetInputObfuscationRounds(vin);
+                nTotal += pcoin->vout[i].nValue * rounds / nVidulumSendRounds;
+            }
+        }
+    }
+
+    return nTotal;
+}
+
+CAmount CWallet::GetDenominatedBalance(bool unconfirmed) const
+{
+    if (fLiteMode) return 0;
+
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+
+            nTotal += pcoin->GetDenominatedCredit(unconfirmed);
+        }
+    }
+
+    return nTotal;
+}
+
+CAmount CWallet::GetUnlockedCoins() const
+{
+    if (fLiteMode) return 0;
+
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+
+            if (pcoin->IsTrusted() && pcoin->GetDepthInMainChain() > 0)
+                nTotal += pcoin->GetUnlockedCredit();
+        }
+    }
+
+    return nTotal;
+}
+
+CAmount CWallet::GetLockedCoins() const
+{
+    if (fLiteMode) return 0;
+
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+
+            if (pcoin->IsTrusted() && pcoin->GetDepthInMainChain() > 0)
+                nTotal += pcoin->GetLockedCredit();
+        }
+    }
+
+    return nTotal;
+}
+
+CAmount CWallet::GetUnconfirmedBalance() const
+{
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+        {
+            const CWalletTx* pcoin = &(*it).second;
+            if (!CheckFinalTx(*pcoin) || (!pcoin->IsTrusted() && pcoin->GetDepthInMainChain() == 0))
+                nTotal += pcoin->GetAvailableCredit();
+        }
+    }
+    return nTotal;
+}
+
+CAmount CWallet::GetImmatureBalance() const
+{
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+        {
+            const CWalletTx* pcoin = &(*it).second;
+            nTotal += pcoin->GetImmatureCredit();
+        }
+    }
+    return nTotal;
+}
+
+CAmount CWallet::GetWatchOnlyBalance() const
+{
+    CAmount nTotal = 0;
+    {
+        LOCK2(cs_main, cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it)
+        {
+            const CWalletTx* pcoin = &(*it).second;
+            if (pcoin->IsTrusted())
+                nTotal += pcoin->GetAvailableWatchOnlyCredit();
+        }
+    }
+
+    return nTotal;
+}
+
+CAmount CWallet::GetUnconfirme
