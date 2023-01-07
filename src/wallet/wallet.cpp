@@ -3827,4 +3827,169 @@ bool CWallet::SelectCoinsByDenominations(int nDenom, CAmount nValueMin, CAmount 
                 }
             } else {
                 //Criterion has not been satisfied, we will only take 1 of each until it is.
-      
+                if ((nDenom & (1 << 0)) && out.tx->vout[out.i].nValue == ((10000 * COIN) + 10000000)) {
+                    fAccepted = true;
+                    fFound10000 = true;
+                } else if ((nDenom & (1 << 1)) && out.tx->vout[out.i].nValue == ((1000 * COIN) + 1000000)) {
+                    fAccepted = true;
+                    fFound1000 = true;
+                } else if ((nDenom & (1 << 2)) && out.tx->vout[out.i].nValue == ((100 * COIN) + 100000)) {
+                    fAccepted = true;
+                    fFound100 = true;
+                } else if ((nDenom & (1 << 3)) && out.tx->vout[out.i].nValue == ((10 * COIN) + 10000)) {
+                    fAccepted = true;
+                    fFound10 = true;
+                } else if ((nDenom & (1 << 4)) && out.tx->vout[out.i].nValue == ((1 * COIN) + 1000)) {
+                    fAccepted = true;
+                    fFound1 = true;
+                } else if ((nDenom & (1 << 5)) && out.tx->vout[out.i].nValue == ((.1 * COIN) + 100)) {
+                    fAccepted = true;
+                    fFoundDot1 = true;
+                }
+            }
+            if (!fAccepted) continue;
+
+            vin.prevPubKey = out.tx->vout[out.i].scriptPubKey; // the inputs PubKey
+            nValueRet += out.tx->vout[out.i].nValue;
+            vCoinsRet.push_back(vin);
+            vCoinsRet2.push_back(out);
+        }
+    }
+
+    return (nValueRet >= nValueMin && fFound10000 && fFound1000 && fFound100 && fFound10 && fFound1 && fFoundDot1);
+}
+
+
+bool CWallet::SelectCoinsDark(CAmount nValueMin, CAmount nValueMax, std::vector<CTxIn>& setCoinsRet, CAmount& nValueRet, int nObfuscationRoundsMin, int nObfuscationRoundsMax) const
+{
+    CCoinControl* coinControl = NULL;
+
+    setCoinsRet.clear();
+    nValueRet = 0;
+
+    vector<COutput> vCoins;
+
+    AvailableCoins(vCoins, true, coinControl, nObfuscationRoundsMin < 0 ? ONLY_NONDENOMINATED_NOT15000IFMN : ONLY_DENOMINATED);
+
+    set<pair<const CWalletTx*, unsigned int> > setCoinsRet2;
+
+    //order the array so largest nondenom are first, then denominations, then very small inputs.
+    sort(vCoins.rbegin(), vCoins.rend(), CompareByPriority());
+
+    BOOST_FOREACH (const COutput& out, vCoins) {
+        //do not allow inputs less than 1 CENT
+        if (out.tx->vout[out.i].nValue < CENT) continue;
+        //do not allow collaterals to be selected
+        if (IsCollateralAmount(out.tx->vout[out.i].nValue)) continue;
+        if (fMasterNode && out.tx->vout[out.i].nValue == 15000 * COIN) continue; //masternode input
+
+        if (nValueRet + out.tx->vout[out.i].nValue <= nValueMax) {
+            CTxIn vin = CTxIn(out.tx->GetHash(), out.i);
+
+            int rounds = GetInputObfuscationRounds(vin);
+            if (rounds >= nObfuscationRoundsMax) continue;
+            if (rounds < nObfuscationRoundsMin) continue;
+
+            vin.prevPubKey = out.tx->vout[out.i].scriptPubKey; // the inputs PubKey
+            nValueRet += out.tx->vout[out.i].nValue;
+            setCoinsRet.push_back(vin);
+            setCoinsRet2.insert(make_pair(out.tx, out.i));
+        }
+    }
+
+    // if it's more than min, we're good to return
+    if (nValueRet >= nValueMin) return true;
+
+    return false;
+}
+
+bool CWallet::SelectCoinsCollateral(std::vector<CTxIn>& setCoinsRet, CAmount& nValueRet) const
+{
+
+    vector<COutput> vCoins;
+
+    //LogPrintf(" selecting coins for collateral\n");
+    AvailableCoins(vCoins);
+
+    //LogPrintf("found coins %d\n", (int)vCoins.size());
+
+    set<pair<const CWalletTx*, unsigned int> > setCoinsRet2;
+
+    BOOST_FOREACH (const COutput& out, vCoins) {
+        // collateral inputs will always be a multiple of DARSEND_COLLATERAL, up to five
+        if (IsCollateralAmount(out.tx->vout[out.i].nValue)) {
+            CTxIn vin = CTxIn(out.tx->GetHash(), out.i);
+
+            vin.prevPubKey = out.tx->vout[out.i].scriptPubKey; // the inputs PubKey
+            nValueRet += out.tx->vout[out.i].nValue;
+            setCoinsRet.push_back(vin);
+            setCoinsRet2.insert(make_pair(out.tx, out.i));
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int CWallet::CountInputsWithAmount(CAmount nInputAmount)
+{
+    CAmount nTotal = 0;
+    {
+        LOCK(cs_wallet);
+        for (map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); ++it) {
+            const CWalletTx* pcoin = &(*it).second;
+            if (pcoin->IsTrusted()) {
+                int nDepth = pcoin->GetDepthInMainChain(false);
+
+                for (unsigned int i = 0; i < pcoin->vout.size(); i++) {
+                    COutput out = COutput(pcoin, i, nDepth, true);
+                    CTxIn vin = CTxIn(out.tx->GetHash(), out.i);
+
+                    if (out.tx->vout[out.i].nValue != nInputAmount) continue;
+                    if (!IsDenominatedAmount(pcoin->vout[i].nValue)) continue;
+                    if (IsSpent(out.tx->GetHash(), i) || IsMine(pcoin->vout[i]) != ISMINE_SPENDABLE || !IsDenominated(vin)) continue;
+
+                    nTotal++;
+                }
+            }
+        }
+    }
+
+    return nTotal;
+}
+
+bool CWallet::HasCollateralInputs(bool fOnlyConfirmed) const
+{
+    vector<COutput> vCoins;
+
+    AvailableCoins(vCoins, fOnlyConfirmed);
+
+    int nFound = 0;
+    BOOST_FOREACH (const COutput& out, vCoins)
+        if (IsCollateralAmount(out.tx->vout[out.i].nValue)) nFound++;
+
+    return nFound > 0;
+}
+
+bool CWallet::IsCollateralAmount(CAmount nInputAmount) const
+{
+    return nInputAmount != 0 && nInputAmount % OBFUSCATION_COLLATERAL == 0 && nInputAmount < OBFUSCATION_COLLATERAL * 5 && nInputAmount > OBFUSCATION_COLLATERAL;
+}
+
+bool CWallet::CreateCollateralTransaction(CMutableTransaction& txCollateral, std::string& strReason)
+{
+    /*
+        To doublespend a collateral transaction, it will require a fee higher than this. So there's
+        still a significant cost.
+    */
+    CAmount nFeeRet = 1 * COIN;
+
+    txCollateral.vin.clear();
+    txCollateral.vout.clear();
+
+    CReserveKey reservekey(this);
+    CAmount nValueIn2 = 0;
+    std::vector<CTxIn> vCoinsCollateral;
+
+    if (!SelectCoinsCollateral(vCoinsCollateral, nValueIn2)) {
+        strReason = "Error: Obfuscat
