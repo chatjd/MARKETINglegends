@@ -4551,4 +4551,172 @@ CAmount CWallet::GetMinimumFee(unsigned int nTxBytes, unsigned int nConfirmTarge
     // prevent user from paying a non-sense fee (like 1 satoshi): 0 < fee < minRelayFee
     if (nFeeNeeded < ::minRelayTxFee.GetFee(nTxBytes))
         nFeeNeeded = ::minRelayTxFee.GetFee(nTxBytes);
-    // But always obey the
+    // But always obey the maximum
+    if (nFeeNeeded > maxTxFee)
+        nFeeNeeded = maxTxFee;
+    return nFeeNeeded;
+}
+
+
+string CWallet::PrepareObfuscationDenominate(int minRounds, int maxRounds)
+{
+    if (IsLocked())
+        return _("Error: Wallet locked, unable to create transaction!");
+
+    if (obfuScationPool.GetState() != POOL_STATUS_ERROR && obfuScationPool.GetState() != POOL_STATUS_SUCCESS)
+        if (obfuScationPool.GetEntriesCount() > 0)
+            return _("Error: You already have pending entries in the Obfuscation pool");
+
+    // ** find the coins we'll use
+    std::vector<CTxIn> vCoins;
+    std::vector<CTxIn> vCoinsResult;
+    std::vector<COutput> vCoins2;
+    CAmount nValueIn = 0;
+    CReserveKey reservekey(this);
+
+    /*
+        Select the coins we'll use
+
+        if minRounds >= 0 it means only denominated inputs are going in and coming out
+    */
+    if (minRounds >= 0) {
+        if (!SelectCoinsByDenominations(obfuScationPool.sessionDenom, 0.1 * COIN, OBFUSCATION_POOL_MAX, vCoins, vCoins2, nValueIn, minRounds, maxRounds))
+            return _("Error: Can't select current denominated inputs");
+    }
+
+    LogPrintf("PrepareObfuscationDenominate - preparing obfuscation denominate . Got: %d \n", nValueIn);
+
+    {
+        LOCK(cs_wallet);
+        BOOST_FOREACH (CTxIn v, vCoins)
+            LockCoin(v.prevout);
+    }
+
+    CAmount nValueLeft = nValueIn;
+    std::vector<CTxOut> vOut;
+
+    /*
+        TODO: Front load with needed denominations (e.g. .1, 1 )
+    */
+
+    // Make outputs by looping through denominations: try to add every needed denomination, repeat up to 5-10 times.
+    // This way we can be pretty sure that it should have at least one of each needed denomination.
+    // NOTE: No need to randomize order of inputs because they were
+    // initially shuffled in CWallet::SelectCoinsByDenominations already.
+    int nStep = 0;
+    int nStepsMax = 5 + GetRandInt(5);
+    while (nStep < nStepsMax) {
+        BOOST_FOREACH (CAmount v, obfuScationDenominations) {
+            // only use the ones that are approved
+            bool fAccepted = false;
+            if ((obfuScationPool.sessionDenom & (1 << 0)) && v == ((10000 * COIN) + 10000000)) {
+                fAccepted = true;
+            } else if ((obfuScationPool.sessionDenom & (1 << 1)) && v == ((1000 * COIN) + 1000000)) {
+                fAccepted = true;
+            } else if ((obfuScationPool.sessionDenom & (1 << 2)) && v == ((100 * COIN) + 100000)) {
+                fAccepted = true;
+            } else if ((obfuScationPool.sessionDenom & (1 << 3)) && v == ((10 * COIN) + 10000)) {
+                fAccepted = true;
+            } else if ((obfuScationPool.sessionDenom & (1 << 4)) && v == ((1 * COIN) + 1000)) {
+                fAccepted = true;
+            } else if ((obfuScationPool.sessionDenom & (1 << 5)) && v == ((.1 * COIN) + 100)) {
+                fAccepted = true;
+            }
+            if (!fAccepted) continue;
+
+            // try to add it
+            if (nValueLeft - v >= 0) {
+                // Note: this relies on a fact that both vectors MUST have same size
+                std::vector<CTxIn>::iterator it = vCoins.begin();
+                std::vector<COutput>::iterator it2 = vCoins2.begin();
+                while (it2 != vCoins2.end()) {
+                    // we have matching inputs
+                    if ((*it2).tx->vout[(*it2).i].nValue == v) {
+                        // add new input in resulting vector
+                        vCoinsResult.push_back(*it);
+                        // remove corresponting items from initial vectors
+                        vCoins.erase(it);
+                        vCoins2.erase(it2);
+
+                        CScript scriptChange;
+                        CPubKey vchPubKey;
+                        // use a unique change address
+                        assert(reservekey.GetReservedKey(vchPubKey)); // should never fail, as we just unlocked
+                        scriptChange = GetScriptForDestination(vchPubKey.GetID());
+                        reservekey.KeepKey();
+
+                        // add new output
+                        CTxOut o(v, scriptChange);
+                        vOut.push_back(o);
+
+                        // subtract denomination amount
+                        nValueLeft -= v;
+
+                        break;
+                    }
+                    ++it;
+                    ++it2;
+                }
+            }
+        }
+
+        nStep++;
+
+        if (nValueLeft == 0) break;
+    }
+
+    {
+        // unlock unused coins
+        LOCK(cs_wallet);
+        BOOST_FOREACH (CTxIn v, vCoins)
+            UnlockCoin(v.prevout);
+    }
+
+    if (obfuScationPool.GetDenominations(vOut) != obfuScationPool.sessionDenom) {
+        // unlock used coins on failure
+        LOCK(cs_wallet);
+        BOOST_FOREACH (CTxIn v, vCoinsResult)
+            UnlockCoin(v.prevout);
+        return "Error: can't make current denominated outputs";
+    }
+
+    // randomize the output order
+    std::random_shuffle(vOut.begin(), vOut.end());
+
+    // We also do not care about full amount as long as we have right denominations, just pass what we found
+    obfuScationPool.SendObfuscationDenominate(vCoinsResult, vOut, nValueIn - nValueLeft);
+
+    return "";
+}
+
+
+
+DBErrors CWallet::LoadWallet(bool& fFirstRunRet)
+{
+    if (!fFileBacked)
+        return DB_LOAD_OK;
+    fFirstRunRet = false;
+    DBErrors nLoadWalletRet = CWalletDB(strWalletFile,"cr+").LoadWallet(this);
+    if (nLoadWalletRet == DB_NEED_REWRITE)
+    {
+        if (CDB::Rewrite(strWalletFile, "\x04pool"))
+        {
+            LOCK(cs_wallet);
+            setKeyPool.clear();
+            // Note: can't top-up keypool here, because wallet is locked.
+            // User will be prompted to unlock wallet the next operation
+            // that requires a new key.
+        }
+    }
+
+    if (nLoadWalletRet != DB_LOAD_OK)
+        return nLoadWalletRet;
+    fFirstRunRet = !vchDefaultKey.IsValid();
+
+    uiInterface.LoadWallet(this);
+
+    return DB_LOAD_OK;
+}
+
+
+DBErrors CWallet::ZapWalletTx(std::vect
