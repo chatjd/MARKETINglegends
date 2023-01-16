@@ -5131,4 +5131,208 @@ void CWallet::GetAllReserveKeys(set<CKeyID>& setAddress) const
         assert(keypool.vchPubKey.IsValid());
         CKeyID keyID = keypool.vchPubKey.GetID();
         if (!HaveKey(keyID))
-            throw runtime_error("GetAllReserveKeyHashes(): unknow
+            throw runtime_error("GetAllReserveKeyHashes(): unknown key in key pool");
+        setAddress.insert(keyID);
+    }
+}
+
+bool CWallet::UpdatedTransaction(const uint256 &hashTx)
+{
+    {
+        LOCK(cs_wallet);
+        // Only notify UI if this transaction is in this wallet
+        map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(hashTx);
+        if (mi != mapWallet.end())
+        {
+            NotifyTransactionChanged(this, hashTx, CT_UPDATED);
+            return true;
+        }
+    }
+    return false;
+}
+
+void CWallet::LockCoin(COutPoint& output)
+{
+    AssertLockHeld(cs_wallet); // setLockedCoins
+    setLockedCoins.insert(output);
+}
+
+void CWallet::UnlockCoin(COutPoint& output)
+{
+    AssertLockHeld(cs_wallet); // setLockedCoins
+    setLockedCoins.erase(output);
+}
+
+void CWallet::UnlockAllCoins()
+{
+    AssertLockHeld(cs_wallet); // setLockedCoins
+    setLockedCoins.clear();
+}
+
+bool CWallet::IsLockedCoin(uint256 hash, unsigned int n) const
+{
+    AssertLockHeld(cs_wallet); // setLockedCoins
+    COutPoint outpt(hash, n);
+
+    return (setLockedCoins.count(outpt) > 0);
+}
+
+void CWallet::ListLockedCoins(std::vector<COutPoint>& vOutpts)
+{
+    AssertLockHeld(cs_wallet); // setLockedCoins
+    for (std::set<COutPoint>::iterator it = setLockedCoins.begin();
+         it != setLockedCoins.end(); it++) {
+        COutPoint outpt = (*it);
+        vOutpts.push_back(outpt);
+    }
+}
+
+
+// Note Locking Operations
+
+void CWallet::LockNote(const JSOutPoint& output)
+{
+    AssertLockHeld(cs_wallet); // setLockedSproutNotes
+    setLockedSproutNotes.insert(output);
+}
+
+void CWallet::UnlockNote(const JSOutPoint& output)
+{
+    AssertLockHeld(cs_wallet); // setLockedSproutNotes
+    setLockedSproutNotes.erase(output);
+}
+
+void CWallet::UnlockAllSproutNotes()
+{
+    AssertLockHeld(cs_wallet); // setLockedSproutNotes
+    setLockedSproutNotes.clear();
+}
+
+bool CWallet::IsLockedNote(const JSOutPoint& outpt) const
+{
+    AssertLockHeld(cs_wallet); // setLockedSproutNotes
+
+    return (setLockedSproutNotes.count(outpt) > 0);
+}
+
+std::vector<JSOutPoint> CWallet::ListLockedSproutNotes()
+{
+    AssertLockHeld(cs_wallet); // setLockedSproutNotes
+    std::vector<JSOutPoint> vOutpts(setLockedSproutNotes.begin(), setLockedSproutNotes.end());
+    return vOutpts;
+}
+
+void CWallet::LockNote(const SaplingOutPoint& output)
+{
+    AssertLockHeld(cs_wallet);
+    setLockedSaplingNotes.insert(output);
+}
+
+void CWallet::UnlockNote(const SaplingOutPoint& output)
+{
+    AssertLockHeld(cs_wallet);
+    setLockedSaplingNotes.erase(output);
+}
+
+void CWallet::UnlockAllSaplingNotes()
+{
+    AssertLockHeld(cs_wallet);
+    setLockedSaplingNotes.clear();
+}
+
+bool CWallet::IsLockedNote(const SaplingOutPoint& output) const
+{
+    AssertLockHeld(cs_wallet);
+    return (setLockedSaplingNotes.count(output) > 0);
+}
+
+std::vector<SaplingOutPoint> CWallet::ListLockedSaplingNotes()
+{
+    AssertLockHeld(cs_wallet);
+    std::vector<SaplingOutPoint> vOutputs(setLockedSaplingNotes.begin(), setLockedSaplingNotes.end());
+    return vOutputs;
+}
+
+/** @} */ // end of Actions
+
+class CAffectedKeysVisitor : public boost::static_visitor<void> {
+private:
+    const CKeyStore &keystore;
+    std::vector<CKeyID> &vKeys;
+
+public:
+    CAffectedKeysVisitor(const CKeyStore &keystoreIn, std::vector<CKeyID> &vKeysIn) : keystore(keystoreIn), vKeys(vKeysIn) {}
+
+    void Process(const CScript &script) {
+        txnouttype type;
+        std::vector<CTxDestination> vDest;
+        int nRequired;
+        if (ExtractDestinations(script, type, vDest, nRequired)) {
+            BOOST_FOREACH(const CTxDestination &dest, vDest)
+                boost::apply_visitor(*this, dest);
+        }
+    }
+
+    void operator()(const CKeyID &keyId) {
+        if (keystore.HaveKey(keyId))
+            vKeys.push_back(keyId);
+    }
+
+    void operator()(const CScriptID &scriptId) {
+        CScript script;
+        if (keystore.GetCScript(scriptId, script))
+            Process(script);
+    }
+
+    void operator()(const CNoDestination &none) {}
+};
+
+void CWallet::GetKeyBirthTimes(std::map<CKeyID, int64_t> &mapKeyBirth) const {
+    AssertLockHeld(cs_wallet); // mapKeyMetadata
+    mapKeyBirth.clear();
+
+    // get birth times for keys with metadata
+    for (std::map<CKeyID, CKeyMetadata>::const_iterator it = mapKeyMetadata.begin(); it != mapKeyMetadata.end(); it++)
+        if (it->second.nCreateTime)
+            mapKeyBirth[it->first] = it->second.nCreateTime;
+
+    // map in which we'll infer heights of other keys
+    CBlockIndex *pindexMax = chainActive[std::max(0, chainActive.Height() - 144)]; // the tip can be reorganised; use a 144-block safety margin
+    std::map<CKeyID, CBlockIndex*> mapKeyFirstBlock;
+    std::set<CKeyID> setKeys;
+    GetKeys(setKeys);
+    BOOST_FOREACH(const CKeyID &keyid, setKeys) {
+        if (mapKeyBirth.count(keyid) == 0)
+            mapKeyFirstBlock[keyid] = pindexMax;
+    }
+    setKeys.clear();
+
+    // if there are no such keys, we're done
+    if (mapKeyFirstBlock.empty())
+        return;
+
+    // find first block that affects those keys, if there are any left
+    std::vector<CKeyID> vAffected;
+    for (std::map<uint256, CWalletTx>::const_iterator it = mapWallet.begin(); it != mapWallet.end(); it++) {
+        // iterate over all wallet transactions...
+        const CWalletTx &wtx = (*it).second;
+        BlockMap::const_iterator blit = mapBlockIndex.find(wtx.hashBlock);
+        if (blit != mapBlockIndex.end() && chainActive.Contains(blit->second)) {
+            // ... which are already in a block
+            int nHeight = blit->second->nHeight;
+            BOOST_FOREACH(const CTxOut &txout, wtx.vout) {
+                // iterate over all their outputs
+                CAffectedKeysVisitor(*this, vAffected).Process(txout.scriptPubKey);
+                BOOST_FOREACH(const CKeyID &keyid, vAffected) {
+                    // ... and all their affected keys
+                    std::map<CKeyID, CBlockIndex*>::iterator rit = mapKeyFirstBlock.find(keyid);
+                    if (rit != mapKeyFirstBlock.end() && nHeight < rit->second->nHeight)
+                        rit->second = blit->second;
+                }
+                vAffected.clear();
+            }
+        }
+    }
+
+    // Extract block timestamps for those keys
+    for (s
