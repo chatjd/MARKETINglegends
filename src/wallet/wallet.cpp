@@ -5335,4 +5335,211 @@ void CWallet::GetKeyBirthTimes(std::map<CKeyID, int64_t> &mapKeyBirth) const {
     }
 
     // Extract block timestamps for those keys
-    for (s
+    for (std::map<CKeyID, CBlockIndex*>::const_iterator it = mapKeyFirstBlock.begin(); it != mapKeyFirstBlock.end(); it++)
+        mapKeyBirth[it->first] = it->second->GetBlockTime() - 7200; // block times can be 2h off
+}
+
+bool CWallet::AddDestData(const CTxDestination &dest, const std::string &key, const std::string &value)
+{
+    if (boost::get<CNoDestination>(&dest))
+        return false;
+
+    mapAddressBook[dest].destdata.insert(std::make_pair(key, value));
+    if (!fFileBacked)
+        return true;
+    return CWalletDB(strWalletFile).WriteDestData(EncodeDestination(dest), key, value);
+}
+
+bool CWallet::EraseDestData(const CTxDestination &dest, const std::string &key)
+{
+    if (!mapAddressBook[dest].destdata.erase(key))
+        return false;
+    if (!fFileBacked)
+        return true;
+    return CWalletDB(strWalletFile).EraseDestData(EncodeDestination(dest), key);
+}
+
+bool CWallet::LoadDestData(const CTxDestination &dest, const std::string &key, const std::string &value)
+{
+    mapAddressBook[dest].destdata.insert(std::make_pair(key, value));
+    return true;
+}
+
+bool CWallet::GetDestData(const CTxDestination &dest, const std::string &key, std::string *value) const
+{
+    std::map<CTxDestination, CAddressBookData>::const_iterator i = mapAddressBook.find(dest);
+    if(i != mapAddressBook.end())
+    {
+        CAddressBookData::StringMap::const_iterator j = i->second.destdata.find(key);
+        if(j != i->second.destdata.end())
+        {
+            if(value)
+                *value = j->second;
+            return true;
+        }
+    }
+    return false;
+}
+
+CKeyPool::CKeyPool()
+{
+    nTime = GetTime();
+}
+
+CKeyPool::CKeyPool(const CPubKey& vchPubKeyIn)
+{
+    nTime = GetTime();
+    vchPubKey = vchPubKeyIn;
+}
+
+CWalletKey::CWalletKey(int64_t nExpires)
+{
+    nTimeCreated = (nExpires ? GetTime() : 0);
+    nTimeExpires = nExpires;
+}
+
+int CMerkleTx::SetMerkleBranch(const CBlock& block)
+{
+    AssertLockHeld(cs_main);
+    CBlock blockTmp;
+
+    // Update the tx's hashBlock
+    hashBlock = block.GetHash();
+
+    // Locate the transaction
+    for (nIndex = 0; nIndex < (int)block.vtx.size(); nIndex++)
+        if (block.vtx[nIndex] == *(CTransaction*)this)
+            break;
+    if (nIndex == (int)block.vtx.size())
+    {
+        vMerkleBranch.clear();
+        nIndex = -1;
+        LogPrintf("ERROR: SetMerkleBranch(): couldn't find tx in block\n");
+        return 0;
+    }
+
+    // Fill in merkle branch
+    vMerkleBranch = block.GetMerkleBranch(nIndex);
+
+    // Is the tx in a block that's in the main chain
+    BlockMap::iterator mi = mapBlockIndex.find(hashBlock);
+    if (mi == mapBlockIndex.end())
+        return 0;
+    const CBlockIndex* pindex = (*mi).second;
+    if (!pindex || !chainActive.Contains(pindex))
+        return 0;
+
+    return chainActive.Height() - pindex->nHeight + 1;
+}
+
+int CMerkleTx::GetDepthInMainChainINTERNAL(const CBlockIndex* &pindexRet) const
+{
+    if (hashBlock.IsNull() || nIndex == -1)
+        return 0;
+    AssertLockHeld(cs_main);
+
+    // Find the block it claims to be in
+    BlockMap::iterator mi = mapBlockIndex.find(hashBlock);
+    if (mi == mapBlockIndex.end())
+        return 0;
+    CBlockIndex* pindex = (*mi).second;
+    if (!pindex || !chainActive.Contains(pindex))
+        return 0;
+
+    // Make sure the merkle branch connects to this block
+    if (!fMerkleVerified)
+    {
+        if (CBlock::CheckMerkleBranch(GetHash(), vMerkleBranch, nIndex) != pindex->hashMerkleRoot)
+            return 0;
+        fMerkleVerified = true;
+    }
+
+    pindexRet = pindex;
+    return chainActive.Height() - pindex->nHeight + 1;
+}
+
+int CMerkleTx::GetDepthInMainChain(const CBlockIndex* &pindexRet, bool enableIX) const
+{
+    AssertLockHeld(cs_main);
+    int nResult = GetDepthInMainChainINTERNAL(pindexRet);
+    if (nResult == 0 && !mempool.exists(GetHash()))
+        return -1; // Not in chain, not in mempool
+
+    if(enableIX){
+        if (nResult < 6){
+            int signatures = GetTransactionLockSignatures();
+            if(signatures >= SWIFTTX_SIGNATURES_REQUIRED){
+                return nSwiftTXDepth+nResult;
+            }
+        }
+    }
+
+    return nResult;
+}
+
+int CMerkleTx::GetBlocksToMaturity() const
+{
+    if (!IsCoinBase())
+        return 0;
+    return max(0, (COINBASE_MATURITY+1) - GetDepthInMainChain());
+}
+
+
+bool CMerkleTx::AcceptToMemoryPool(bool fLimitFree, bool fRejectAbsurdFee, bool ignoreFees)
+{
+    CValidationState state;
+    return ::AcceptToMemoryPool(mempool, state, *this, fLimitFree, NULL, fRejectAbsurdFee, ignoreFees);
+}
+
+
+int CMerkleTx::GetTransactionLockSignatures() const
+{
+    if (fLargeWorkForkFound || fLargeWorkInvalidChainFound) return -2;
+    if (!IsSporkActive(SPORK_2_SWIFTTX)) return -3;
+    if (!fEnableSwiftTX) return -1;
+
+    //compile consessus vote
+    std::map<uint256, CTransactionLock>::iterator i = mapTxLocks.find(GetHash());
+    if (i != mapTxLocks.end()) {
+        return (*i).second.CountSignatures();
+    }
+
+    return -1;
+}
+
+bool CMerkleTx::IsTransactionLockTimedOut() const
+{
+    if (!fEnableSwiftTX) return 0;
+
+    //compile consessus vote
+    std::map<uint256, CTransactionLock>::iterator i = mapTxLocks.find(GetHash());
+    if (i != mapTxLocks.end()) {
+        return GetTime() > (*i).second.nTimeout;
+    }
+
+    return false;
+}
+
+/**
+ * Find notes in the wallet filtered by payment address, min depth and ability to spend.
+ * These notes are decrypted and added to the output parameter vector, outEntries.
+ */
+void CWallet::GetFilteredNotes(
+    std::vector<CSproutNotePlaintextEntry>& sproutEntries,
+    std::vector<SaplingNoteEntry>& saplingEntries,
+    std::string address,
+    int minDepth,
+    bool ignoreSpent,
+    bool requireSpendingKey)
+{
+    std::set<PaymentAddress> filterAddresses;
+
+    if (address.length() > 0) {
+        filterAddresses.insert(DecodePaymentAddress(address));
+    }
+
+    GetFilteredNotes(sproutEntries, saplingEntries, filterAddresses, minDepth, INT_MAX, ignoreSpent, requireSpendingKey);
+}
+
+/**
+ * Find notes in the wallet filtered by payment
