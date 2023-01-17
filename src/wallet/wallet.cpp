@@ -5542,4 +5542,165 @@ void CWallet::GetFilteredNotes(
 }
 
 /**
- * Find notes in the wallet filtered by payment
+ * Find notes in the wallet filtered by payment addresses, min depth, max depth, 
+ * if the note is spent, if a spending key is required, and if the notes are locked.
+ * These notes are decrypted and added to the output parameter vector, outEntries.
+ */
+void CWallet::GetFilteredNotes(
+    std::vector<CSproutNotePlaintextEntry>& sproutEntries,
+    std::vector<SaplingNoteEntry>& saplingEntries,
+    std::set<PaymentAddress>& filterAddresses,
+    int minDepth,
+    int maxDepth,
+    bool ignoreSpent,
+    bool requireSpendingKey,
+    bool ignoreLocked)
+{
+    LOCK2(cs_main, cs_wallet);
+
+    for (auto & p : mapWallet) {
+        CWalletTx wtx = p.second;
+
+        // Filter the transactions before checking for notes
+        if (!CheckFinalTx(wtx) ||
+            wtx.GetBlocksToMaturity() > 0 ||
+            wtx.GetDepthInMainChain() < minDepth ||
+            wtx.GetDepthInMainChain() > maxDepth) {
+            continue;
+        }
+
+        for (auto & pair : wtx.mapSproutNoteData) {
+            JSOutPoint jsop = pair.first;
+            SproutNoteData nd = pair.second;
+            SproutPaymentAddress pa = nd.address;
+
+            // skip notes which belong to a different payment address in the wallet
+            if (!(filterAddresses.empty() || filterAddresses.count(pa))) {
+                continue;
+            }
+
+            // skip note which has been spent
+            if (ignoreSpent && nd.nullifier && IsSproutSpent(*nd.nullifier)) {
+                continue;
+            }
+
+            // skip notes which cannot be spent
+            if (requireSpendingKey && !HaveSproutSpendingKey(pa)) {
+                continue;
+            }
+
+            // skip locked notes
+            if (ignoreLocked && IsLockedNote(jsop)) {
+                continue;
+            }
+
+            int i = jsop.js; // Index into CTransaction.vjoinsplit
+            int j = jsop.n; // Index into JSDescription.ciphertexts
+
+            // Get cached decryptor
+            ZCNoteDecryption decryptor;
+            if (!GetNoteDecryptor(pa, decryptor)) {
+                // Note decryptors are created when the wallet is loaded, so it should always exist
+                throw std::runtime_error(strprintf("Could not find note decryptor for payment address %s", EncodePaymentAddress(pa)));
+            }
+
+            // determine amount of funds in the note
+            auto hSig = wtx.vjoinsplit[i].h_sig(*pvidulumParams, wtx.joinSplitPubKey);
+            try {
+                SproutNotePlaintext plaintext = SproutNotePlaintext::decrypt(
+                        decryptor,
+                        wtx.vjoinsplit[i].ciphertexts[j],
+                        wtx.vjoinsplit[i].ephemeralKey,
+                        hSig,
+                        (unsigned char) j);
+
+                sproutEntries.push_back(CSproutNotePlaintextEntry{jsop, pa, plaintext, wtx.GetDepthInMainChain()});
+
+            } catch (const note_decryption_failed &err) {
+                // Couldn't decrypt with this spending key
+                throw std::runtime_error(strprintf("Could not decrypt note for payment address %s", EncodePaymentAddress(pa)));
+            } catch (const std::exception &exc) {
+                // Unexpected failure
+                throw std::runtime_error(strprintf("Error while decrypting note for payment address %s: %s", EncodePaymentAddress(pa), exc.what()));
+            }
+        }
+
+        for (auto & pair : wtx.mapSaplingNoteData) {
+            SaplingOutPoint op = pair.first;
+            SaplingNoteData nd = pair.second;
+
+            auto maybe_pt = SaplingNotePlaintext::decrypt(
+                wtx.vShieldedOutput[op.n].encCiphertext,
+                nd.ivk,
+                wtx.vShieldedOutput[op.n].ephemeralKey,
+                wtx.vShieldedOutput[op.n].cm);
+            assert(static_cast<bool>(maybe_pt));
+            auto notePt = maybe_pt.get();
+
+            auto maybe_pa = nd.ivk.address(notePt.d);
+            assert(static_cast<bool>(maybe_pa));
+            auto pa = maybe_pa.get();
+
+            // skip notes which belong to a different payment address in the wallet
+            if (!(filterAddresses.empty() || filterAddresses.count(pa))) {
+                continue;
+            }
+
+            if (ignoreSpent && nd.nullifier && IsSaplingSpent(*nd.nullifier)) {
+                continue;
+            }
+
+            // skip notes which cannot be spent
+            if (requireSpendingKey) {
+                libzcash::SaplingIncomingViewingKey ivk;
+                libzcash::SaplingFullViewingKey fvk;
+                if (!(GetSaplingIncomingViewingKey(pa, ivk) &&
+                    GetSaplingFullViewingKey(ivk, fvk) &&
+                    HaveSaplingSpendingKey(fvk))) {
+                    continue;
+                }
+            }
+
+            // skip locked notes
+            if (ignoreLocked && IsLockedNote(op)) {
+                continue;
+            }
+
+            auto note = notePt.note(nd.ivk).get();
+            saplingEntries.push_back(SaplingNoteEntry {
+                op, pa, note, notePt.memo(), wtx.GetDepthInMainChain() });
+        }
+    }
+}
+
+
+//
+// Shielded key and address generalizations
+//
+
+bool PaymentAddressBelongsToWallet::operator()(const libzcash::SproutPaymentAddress &zaddr) const
+{
+    return m_wallet->HaveSproutSpendingKey(zaddr) || m_wallet->HaveSproutViewingKey(zaddr);
+}
+
+bool PaymentAddressBelongsToWallet::operator()(const libzcash::SaplingPaymentAddress &zaddr) const
+{
+    libzcash::SaplingIncomingViewingKey ivk;
+
+    // If we have a SaplingExtendedSpendingKey in the wallet, then we will
+    // also have the corresponding SaplingFullViewingKey.
+    return m_wallet->GetSaplingIncomingViewingKey(zaddr, ivk) &&
+        m_wallet->HaveSaplingFullViewingKey(ivk);
+}
+
+bool PaymentAddressBelongsToWallet::operator()(const libzcash::InvalidEncoding& no) const
+{
+    return false;
+}
+
+bool HaveSpendingKeyForPaymentAddress::operator()(const libzcash::SproutPaymentAddress &zaddr) const
+{
+    return m_wallet->HaveSproutSpendingKey(zaddr);
+}
+
+bool HaveSpendingKeyForPaymentAddress::operator()(const libzcash::Saplin
