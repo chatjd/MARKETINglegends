@@ -595,4 +595,184 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
             }
 
             // Old wallets store keys as "key" [pubkey] => [privkey]
-            // ... which was slow for wallets with lots of 
+            // ... which was slow for wallets with lots of keys, because the public key is re-derived from the private key
+            // using EC operations as a checksum.
+            // Newer wallets store keys as "key"[pubkey] => [privkey][hash(pubkey,privkey)], which is much faster while
+            // remaining backwards-compatible.
+            try
+            {
+                ssValue >> hash;
+            }
+            catch (...) {}
+
+            bool fSkipCheck = false;
+
+            if (!hash.IsNull())
+            {
+                // hash pubkey/privkey to accelerate wallet load
+                std::vector<unsigned char> vchKey;
+                vchKey.reserve(vchPubKey.size() + pkey.size());
+                vchKey.insert(vchKey.end(), vchPubKey.begin(), vchPubKey.end());
+                vchKey.insert(vchKey.end(), pkey.begin(), pkey.end());
+
+                if (Hash(vchKey.begin(), vchKey.end()) != hash)
+                {
+                    strErr = "Error reading wallet database: CPubKey/CPrivKey corrupt";
+                    return false;
+                }
+
+                fSkipCheck = true;
+            }
+
+            if (!key.Load(pkey, vchPubKey, fSkipCheck))
+            {
+                strErr = "Error reading wallet database: CPrivKey corrupt";
+                return false;
+            }
+            if (!pwallet->LoadKey(key, vchPubKey))
+            {
+                strErr = "Error reading wallet database: LoadKey failed";
+                return false;
+            }
+        }
+        else if (strType == "mkey")
+        {
+            unsigned int nID;
+            ssKey >> nID;
+            CMasterKey kMasterKey;
+            ssValue >> kMasterKey;
+            if(pwallet->mapMasterKeys.count(nID) != 0)
+            {
+                strErr = strprintf("Error reading wallet database: duplicate CMasterKey id %u", nID);
+                return false;
+            }
+            pwallet->mapMasterKeys[nID] = kMasterKey;
+            if (pwallet->nMasterKeyMaxID < nID)
+                pwallet->nMasterKeyMaxID = nID;
+        }
+        else if (strType == "ckey")
+        {
+            vector<unsigned char> vchPubKey;
+            ssKey >> vchPubKey;
+            vector<unsigned char> vchPrivKey;
+            ssValue >> vchPrivKey;
+            wss.nCKeys++;
+
+            if (!pwallet->LoadCryptedKey(vchPubKey, vchPrivKey))
+            {
+                strErr = "Error reading wallet database: LoadCryptedKey failed";
+                return false;
+            }
+            wss.fIsEncrypted = true;
+        }
+        else if (strType == "czkey")
+        {
+            libzcash::SproutPaymentAddress addr;
+            ssKey >> addr;
+            // Deserialization of a pair is just one item after another
+            uint256 rkValue;
+            ssValue >> rkValue;
+            libzcash::ReceivingKey rk(rkValue);
+            vector<unsigned char> vchCryptedSecret;
+            ssValue >> vchCryptedSecret;
+            wss.nCKeys++;
+
+            if (!pwallet->LoadCryptedZKey(addr, rk, vchCryptedSecret))
+            {
+                strErr = "Error reading wallet database: LoadCryptedZKey failed";
+                return false;
+            }
+            wss.fIsEncrypted = true;
+        }
+        else if (strType == "csapzkey")
+        {
+            libzcash::SaplingIncomingViewingKey ivk;
+            ssKey >> ivk;
+            libzcash::SaplingExtendedFullViewingKey extfvk;
+            ssValue >> extfvk;
+            vector<unsigned char> vchCryptedSecret;
+            ssValue >> vchCryptedSecret;
+            wss.nCKeys++;
+
+            if (!pwallet->LoadCryptedSaplingZKey(extfvk, vchCryptedSecret))
+            {
+                strErr = "Error reading wallet database: LoadCryptedSaplingZKey failed";
+                return false;
+            }
+            wss.fIsEncrypted = true;
+        }
+        else if (strType == "keymeta")
+        {
+            CPubKey vchPubKey;
+            ssKey >> vchPubKey;
+            CKeyMetadata keyMeta;
+            ssValue >> keyMeta;
+            wss.nKeyMeta++;
+
+            pwallet->LoadKeyMetadata(vchPubKey, keyMeta);
+
+            // find earliest key creation time, as wallet birthday
+            if (!pwallet->nTimeFirstKey ||
+                (keyMeta.nCreateTime < pwallet->nTimeFirstKey))
+                pwallet->nTimeFirstKey = keyMeta.nCreateTime;
+        }
+        else if (strType == "zkeymeta")
+        {
+            libzcash::SproutPaymentAddress addr;
+            ssKey >> addr;
+            CKeyMetadata keyMeta;
+            ssValue >> keyMeta;
+            wss.nZKeyMeta++;
+
+            pwallet->LoadZKeyMetadata(addr, keyMeta);
+
+            // ignore earliest key creation time as taddr will exist before any zaddr
+        }
+        else if (strType == "sapzkeymeta")
+        {
+            libzcash::SaplingIncomingViewingKey ivk;
+            ssKey >> ivk;
+            CKeyMetadata keyMeta;
+            ssValue >> keyMeta;
+
+            wss.nZKeyMeta++;
+
+            pwallet->LoadSaplingZKeyMetadata(ivk, keyMeta);
+        }
+        else if (strType == "sapzaddr")
+        {
+            libzcash::SaplingPaymentAddress addr;
+            ssKey >> addr;
+            libzcash::SaplingIncomingViewingKey ivk;
+            ssValue >> ivk;
+
+            wss.nSapZAddrs++;
+
+            if (!pwallet->LoadSaplingPaymentAddress(addr, ivk))
+            {
+                strErr = "Error reading wallet database: LoadSaplingPaymentAddress failed";
+                return false;
+            }
+        }
+        else if (strType == "defaultkey")
+        {
+            ssValue >> pwallet->vchDefaultKey;
+        }
+        else if (strType == "pool")
+        {
+            int64_t nIndex;
+            ssKey >> nIndex;
+            CKeyPool keypool;
+            ssValue >> keypool;
+            pwallet->setKeyPool.insert(nIndex);
+
+            // If no metadata exists yet, create a default with the pool key's
+            // creation time. Note that this may be overwritten by actually
+            // stored metadata for that key later, which is fine.
+            CKeyID keyid = keypool.vchPubKey.GetID();
+            if (pwallet->mapKeyMetadata.count(keyid) == 0)
+                pwallet->mapKeyMetadata[keyid] = CKeyMetadata(keypool.nTime);
+        }
+        else if (strType == "version")
+        {
+    
