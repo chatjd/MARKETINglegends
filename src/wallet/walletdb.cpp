@@ -401,4 +401,198 @@ DBErrors CWalletDB::ReorderTransactions(CWallet* pwallet)
             if (!nOrderPosOff)
                 continue;
 
-            // Since we're
+            // Since we're changing the order, write it back
+            if (pwtx)
+            {
+                if (!WriteTx(pwtx->GetHash(), *pwtx))
+                    return DB_LOAD_FAIL;
+            }
+            else
+                if (!WriteAccountingEntry(pacentry->nEntryNo, *pacentry))
+                    return DB_LOAD_FAIL;
+        }
+    }
+    WriteOrderPosNext(nOrderPosNext);
+
+    return DB_LOAD_OK;
+}
+
+class CWalletScanState {
+public:
+    unsigned int nKeys;
+    unsigned int nCKeys;
+    unsigned int nKeyMeta;
+    unsigned int nZKeys;
+    unsigned int nCZKeys;
+    unsigned int nZKeyMeta;
+    unsigned int nSapZAddrs;
+    bool fIsEncrypted;
+    bool fAnyUnordered;
+    int nFileVersion;
+    vector<uint256> vWalletUpgrade;
+
+    CWalletScanState() {
+        nKeys = nCKeys = nKeyMeta = nZKeys = nCZKeys = nZKeyMeta = nSapZAddrs = 0;
+        fIsEncrypted = false;
+        fAnyUnordered = false;
+        nFileVersion = 0;
+    }
+};
+
+bool
+ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
+             CWalletScanState &wss, string& strType, string& strErr)
+{
+    try {
+        // Unserialize
+        // Taking advantage of the fact that pair serialization
+        // is just the two items serialized one after the other
+        ssKey >> strType;
+        if (strType == "name")
+        {
+            string strAddress;
+            ssKey >> strAddress;
+            ssValue >> pwallet->mapAddressBook[DecodeDestination(strAddress)].name;
+        }
+        else if (strType == "purpose")
+        {
+            string strAddress;
+            ssKey >> strAddress;
+            ssValue >> pwallet->mapAddressBook[DecodeDestination(strAddress)].purpose;
+        }
+        else if (strType == "tx")
+        {
+            uint256 hash;
+            ssKey >> hash;
+            CWalletTx wtx;
+            ssValue >> wtx;
+            CValidationState state;
+            auto verifier = libzcash::ProofVerifier::Strict();
+            if (!(CheckTransaction(wtx, state, verifier) && (wtx.GetHash() == hash) && state.IsValid()))
+                return false;
+
+            // Undo serialize changes in 31600
+            if (31404 <= wtx.fTimeReceivedIsTxTime && wtx.fTimeReceivedIsTxTime <= 31703)
+            {
+                if (!ssValue.empty())
+                {
+                    char fTmp;
+                    char fUnused;
+                    ssValue >> fTmp >> fUnused >> wtx.strFromAccount;
+                    strErr = strprintf("LoadWallet() upgrading tx ver=%d %d '%s' %s",
+                                       wtx.fTimeReceivedIsTxTime, fTmp, wtx.strFromAccount, hash.ToString());
+                    wtx.fTimeReceivedIsTxTime = fTmp;
+                }
+                else
+                {
+                    strErr = strprintf("LoadWallet() repairing tx ver=%d %s", wtx.fTimeReceivedIsTxTime, hash.ToString());
+                    wtx.fTimeReceivedIsTxTime = 0;
+                }
+                wss.vWalletUpgrade.push_back(hash);
+            }
+
+            if (wtx.nOrderPos == -1)
+                wss.fAnyUnordered = true;
+
+            pwallet->AddToWallet(wtx, true, NULL);
+        }
+        else if (strType == "acentry")
+        {
+            string strAccount;
+            ssKey >> strAccount;
+            uint64_t nNumber;
+            ssKey >> nNumber;
+            if (nNumber > nAccountingEntryNumber)
+                nAccountingEntryNumber = nNumber;
+
+            if (!wss.fAnyUnordered)
+            {
+                CAccountingEntry acentry;
+                ssValue >> acentry;
+                if (acentry.nOrderPos == -1)
+                    wss.fAnyUnordered = true;
+            }
+        }
+        else if (strType == "watchs")
+        {
+            CScript script;
+            ssKey >> *(CScriptBase*)(&script);
+            char fYes;
+            ssValue >> fYes;
+            if (fYes == '1')
+                pwallet->LoadWatchOnly(script);
+
+            // Watch-only addresses have no birthday information for now,
+            // so set the wallet birthday to the beginning of time.
+            pwallet->nTimeFirstKey = 1;
+        }
+        else if (strType == "vkey")
+        {
+            libzcash::SproutViewingKey vk;
+            ssKey >> vk;
+            char fYes;
+            ssValue >> fYes;
+            if (fYes == '1')
+                pwallet->LoadSproutViewingKey(vk);
+
+            // Viewing keys have no birthday information for now,
+            // so set the wallet birthday to the beginning of time.
+            pwallet->nTimeFirstKey = 1;
+        }
+        else if (strType == "zkey")
+        {
+            libzcash::SproutPaymentAddress addr;
+            ssKey >> addr;
+            libzcash::SproutSpendingKey key;
+            ssValue >> key;
+
+            if (!pwallet->LoadZKey(key))
+            {
+                strErr = "Error reading wallet database: LoadZKey failed";
+                return false;
+            }
+
+            wss.nZKeys++;
+        }
+        else if (strType == "sapzkey")
+        {
+            libzcash::SaplingIncomingViewingKey ivk;
+            ssKey >> ivk;
+            libzcash::SaplingExtendedSpendingKey key;
+            ssValue >> key;
+
+            if (!pwallet->LoadSaplingZKey(key))
+            {
+                strErr = "Error reading wallet database: LoadSaplingZKey failed";
+                return false;
+            }
+
+            //add checks for integrity
+            wss.nZKeys++;
+        }
+
+        else if (strType == "key" || strType == "wkey")
+        {
+            CPubKey vchPubKey;
+            ssKey >> vchPubKey;
+            if (!vchPubKey.IsValid())
+            {
+                strErr = "Error reading wallet database: CPubKey corrupt";
+                return false;
+            }
+            CKey key;
+            CPrivKey pkey;
+            uint256 hash;
+
+            if (strType == "key")
+            {
+                wss.nKeys++;
+                ssValue >> pkey;
+            } else {
+                CWalletKey wkey;
+                ssValue >> wkey;
+                pkey = wkey.vchPrivKey;
+            }
+
+            // Old wallets store keys as "key" [pubkey] => [privkey]
+            // ... which was slow for wallets with lots of 
