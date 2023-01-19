@@ -775,4 +775,188 @@ ReadKeyValue(CWallet* pwallet, CDataStream& ssKey, CDataStream& ssValue,
         }
         else if (strType == "version")
         {
-    
+            ssValue >> wss.nFileVersion;
+            if (wss.nFileVersion == 10300)
+                wss.nFileVersion = 300;
+        }
+        else if (strType == "cscript")
+        {
+            uint160 hash;
+            ssKey >> hash;
+            CScript script;
+            ssValue >> *(CScriptBase*)(&script);
+            if (!pwallet->LoadCScript(script))
+            {
+                strErr = "Error reading wallet database: LoadCScript failed";
+                return false;
+            }
+        }
+        else if (strType == "orderposnext")
+        {
+            ssValue >> pwallet->nOrderPosNext;
+        }
+        else if (strType == "destdata")
+        {
+            std::string strAddress, strKey, strValue;
+            ssKey >> strAddress;
+            ssKey >> strKey;
+            ssValue >> strValue;
+            if (!pwallet->LoadDestData(DecodeDestination(strAddress), strKey, strValue))
+            {
+                strErr = "Error reading wallet database: LoadDestData failed";
+                return false;
+            }
+        }
+        else if (strType == "witnesscachesize")
+        {
+            ssValue >> pwallet->nWitnessCacheSize;
+        }
+        else if (strType == "hdseed")
+        {
+            uint256 seedFp;
+            RawHDSeed rawSeed;
+            ssKey >> seedFp;
+            ssValue >> rawSeed;
+            HDSeed seed(rawSeed);
+
+            if (seed.Fingerprint() != seedFp)
+            {
+                strErr = "Error reading wallet database: HDSeed corrupt";
+                return false;
+            }
+
+            if (!pwallet->LoadHDSeed(seed))
+            {
+                strErr = "Error reading wallet database: LoadHDSeed failed";
+                return false;
+            }
+        }
+        else if (strType == "chdseed")
+        {
+            uint256 seedFp;
+            vector<unsigned char> vchCryptedSecret;
+            ssKey >> seedFp;
+            ssValue >> vchCryptedSecret;
+            if (!pwallet->LoadCryptedHDSeed(seedFp, vchCryptedSecret))
+            {
+                strErr = "Error reading wallet database: LoadCryptedHDSeed failed";
+                return false;
+            }
+            wss.fIsEncrypted = true;
+        }
+        else if (strType == "hdchain")
+        {
+            CHDChain chain;
+            ssValue >> chain;
+            pwallet->SetHDChain(chain, true);
+        }
+    } catch (...)
+    {
+        return false;
+    }
+    return true;
+}
+
+static bool IsKeyType(string strType)
+{
+    return (strType== "key" || strType == "wkey" ||
+            strType == "hdseed" || strType == "chdseed" ||
+            strType == "zkey" || strType == "czkey" ||
+            strType == "sapzkey" || strType == "csapzkey" ||
+            strType == "vkey" ||
+            strType == "mkey" || strType == "ckey");
+}
+
+DBErrors CWalletDB::LoadWallet(CWallet* pwallet)
+{
+    pwallet->vchDefaultKey = CPubKey();
+    CWalletScanState wss;
+    bool fNoncriticalErrors = false;
+    DBErrors result = DB_LOAD_OK;
+
+    try {
+        LOCK(pwallet->cs_wallet);
+        int nMinVersion = 0;
+        if (Read((string)"minversion", nMinVersion))
+        {
+            if (nMinVersion > CLIENT_VERSION)
+                return DB_TOO_NEW;
+            pwallet->LoadMinVersion(nMinVersion);
+        }
+
+        // Get cursor
+        Dbc* pcursor = GetCursor();
+        if (!pcursor)
+        {
+            LogPrintf("Error getting wallet database cursor\n");
+            return DB_CORRUPT;
+        }
+
+        while (true)
+        {
+            // Read next record
+            CDataStream ssKey(SER_DISK, CLIENT_VERSION);
+            CDataStream ssValue(SER_DISK, CLIENT_VERSION);
+            int ret = ReadAtCursor(pcursor, ssKey, ssValue);
+            if (ret == DB_NOTFOUND)
+                break;
+            else if (ret != 0)
+            {
+                LogPrintf("Error reading next record from wallet database\n");
+                return DB_CORRUPT;
+            }
+
+            // Try to be tolerant of single corrupt records:
+            string strType, strErr;
+            if (!ReadKeyValue(pwallet, ssKey, ssValue, wss, strType, strErr))
+            {
+                // losing keys is considered a catastrophic error, anything else
+                // we assume the user can live with:
+                if (IsKeyType(strType))
+                    result = DB_CORRUPT;
+                else
+                {
+                    // Leave other errors alone, if we try to fix them we might make things worse.
+                    fNoncriticalErrors = true; // ... but do warn the user there is something wrong.
+                    if (strType == "tx")
+                        // Rescan if there is a bad transaction record:
+                        SoftSetBoolArg("-rescan", true);
+                }
+            }
+            if (!strErr.empty())
+                LogPrintf("%s\n", strErr);
+        }
+        pcursor->close();
+    }
+    catch (const boost::thread_interrupted&) {
+        throw;
+    }
+    catch (...) {
+        result = DB_CORRUPT;
+    }
+
+    if (fNoncriticalErrors && result == DB_LOAD_OK)
+        result = DB_NONCRITICAL_ERROR;
+
+    // Any wallet corruption at all: skip any rewriting or
+    // upgrading, we don't want to make it worse.
+    if (result != DB_LOAD_OK)
+        return result;
+
+    LogPrintf("nFileVersion = %d\n", wss.nFileVersion);
+
+    LogPrintf("Keys: %u plaintext, %u encrypted, %u w/ metadata, %u total\n",
+           wss.nKeys, wss.nCKeys, wss.nKeyMeta, wss.nKeys + wss.nCKeys);
+
+    LogPrintf("ZKeys: %u plaintext, %u encrypted, %u w/metadata, %u total\n",
+           wss.nZKeys, wss.nCZKeys, wss.nZKeyMeta, wss.nZKeys + wss.nCZKeys);
+
+    // nTimeFirstKey is only reliable if all keys have metadata
+    if ((wss.nKeys + wss.nCKeys) != wss.nKeyMeta)
+        pwallet->nTimeFirstKey = 1; // 0 would be considered 'no value'
+
+    BOOST_FOREACH(uint256 hash, wss.vWalletUpgrade)
+        WriteTx(hash, pwallet->mapWallet[hash]);
+
+    // Rewrite encrypted wallets of versions 0.4.0 and 0.5.0rc:
+    if (wss.fIsEncrypted && (wss.nFileVersion == 40000 || wss.nFileVersion =
