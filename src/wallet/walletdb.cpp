@@ -1148,4 +1148,130 @@ bool BackupWallet(const CWallet& wallet, const string& strDest)
 
                 try {
                     boost::filesystem::copy_file(pathSrc, pathDest, boost::filesystem::copy_option::overwrite_if_exists);
-                    LogPrintf("copied wallet.dat to %s\n", 
+                    LogPrintf("copied wallet.dat to %s\n", pathDest.string());
+                    return true;
+                } catch (const boost::filesystem::filesystem_error& e) {
+                    LogPrintf("error copying wallet.dat to %s - %s\n", pathDest.string(), e.what());
+                    return false;
+                }
+            }
+        }
+        MilliSleep(100);
+    }
+    return false;
+}
+
+//
+// Try to (very carefully!) recover wallet.dat if there is a problem.
+//
+bool CWalletDB::Recover(CDBEnv& dbenv, const std::string& filename, bool fOnlyKeys)
+{
+    // Recovery procedure:
+    // move wallet.dat to wallet.timestamp.bak
+    // Call Salvage with fAggressive=true to
+    // get as much data as possible.
+    // Rewrite salvaged data to wallet.dat
+    // Set -rescan so any missing transactions will be
+    // found.
+    int64_t now = GetTime();
+    std::string newFilename = strprintf("wallet.%d.bak", now);
+
+    int result = dbenv.dbenv->dbrename(NULL, filename.c_str(), NULL,
+                                       newFilename.c_str(), DB_AUTO_COMMIT);
+    if (result == 0)
+        LogPrintf("Renamed %s to %s\n", filename, newFilename);
+    else
+    {
+        LogPrintf("Failed to rename %s to %s\n", filename, newFilename);
+        return false;
+    }
+
+    std::vector<CDBEnv::KeyValPair> salvagedData;
+    bool fSuccess = dbenv.Salvage(newFilename, true, salvagedData);
+    if (salvagedData.empty())
+    {
+        LogPrintf("Salvage(aggressive) found no records in %s.\n", newFilename);
+        return false;
+    }
+    LogPrintf("Salvage(aggressive) found %u records\n", salvagedData.size());
+
+    boost::scoped_ptr<Db> pdbCopy(new Db(dbenv.dbenv, 0));
+    int ret = pdbCopy->open(NULL,               // Txn pointer
+                            filename.c_str(),   // Filename
+                            "main",             // Logical db name
+                            DB_BTREE,           // Database type
+                            DB_CREATE,          // Flags
+                            0);
+    if (ret > 0)
+    {
+        LogPrintf("Cannot create database file %s\n", filename);
+        return false;
+    }
+    CWallet dummyWallet;
+    CWalletScanState wss;
+
+    DbTxn* ptxn = dbenv.TxnBegin();
+    BOOST_FOREACH(CDBEnv::KeyValPair& row, salvagedData)
+    {
+        if (fOnlyKeys)
+        {
+            CDataStream ssKey(row.first, SER_DISK, CLIENT_VERSION);
+            CDataStream ssValue(row.second, SER_DISK, CLIENT_VERSION);
+            string strType, strErr;
+            bool fReadOK = ReadKeyValue(&dummyWallet, ssKey, ssValue,
+                                        wss, strType, strErr);
+            if (!IsKeyType(strType))
+                continue;
+            if (!fReadOK)
+            {
+                LogPrintf("WARNING: CWalletDB::Recover skipping %s: %s\n", strType, strErr);
+                continue;
+            }
+        }
+        Dbt datKey(&row.first[0], row.first.size());
+        Dbt datValue(&row.second[0], row.second.size());
+        int ret2 = pdbCopy->put(ptxn, &datKey, &datValue, DB_NOOVERWRITE);
+        if (ret2 > 0)
+            fSuccess = false;
+    }
+    ptxn->commit(0);
+    pdbCopy->close(0);
+
+    return fSuccess;
+}
+
+bool CWalletDB::Recover(CDBEnv& dbenv, const std::string& filename)
+{
+    return CWalletDB::Recover(dbenv, filename, false);
+}
+
+bool CWalletDB::WriteDestData(const std::string &address, const std::string &key, const std::string &value)
+{
+    nWalletDBUpdated++;
+    return Write(std::make_pair(std::string("destdata"), std::make_pair(address, key)), value);
+}
+
+bool CWalletDB::EraseDestData(const std::string &address, const std::string &key)
+{
+    nWalletDBUpdated++;
+    return Erase(std::make_pair(std::string("destdata"), std::make_pair(address, key)));
+}
+
+
+bool CWalletDB::WriteHDSeed(const HDSeed& seed)
+{
+    nWalletDBUpdated++;
+    return Write(std::make_pair(std::string("hdseed"), seed.Fingerprint()), seed.RawSeed());
+}
+
+bool CWalletDB::WriteCryptedHDSeed(const uint256& seedFp, const std::vector<unsigned char>& vchCryptedSecret)
+{
+    nWalletDBUpdated++;
+    return Write(std::make_pair(std::string("chdseed"), seedFp), vchCryptedSecret);
+}
+
+bool CWalletDB::WriteHDChain(const CHDChain& chain)
+{
+    nWalletDBUpdated++;
+    return Write(std::string("hdchain"), chain);
+}
